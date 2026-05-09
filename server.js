@@ -59,6 +59,76 @@ function pickDataSheet(workbook) {
     return sheetName;
 }
 
+// =============================================================
+// BOOTSTRAP: default rows for Distance + Paint
+// Auto-written to Excel on first /api/master-data call if missing
+// =============================================================
+const BOOTSTRAP_DISTANCE = [
+    { 'Parameter Name':'Distance','Subcategory':'Distance','Option ID':'DIST001','Option Name':'0-100 km',  'Rate':1500,'Type':'RATE','Unit':'MT','Min':0,  'Max':100 },
+    { 'Parameter Name':'Distance','Subcategory':'Distance','Option ID':'DIST002','Option Name':'101-200 km','Rate':2500,'Type':'RATE','Unit':'MT','Min':101,'Max':200 },
+    { 'Parameter Name':'Distance','Subcategory':'Distance','Option ID':'DIST003','Option Name':'201-300 km','Rate':3500,'Type':'RATE','Unit':'MT','Min':201,'Max':300 },
+    { 'Parameter Name':'Distance','Subcategory':'Distance','Option ID':'DIST004','Option Name':'301-400 km','Rate':4500,'Type':'RATE','Unit':'MT','Min':301,'Max':400 },
+    { 'Parameter Name':'Distance','Subcategory':'Distance','Option ID':'DIST005','Option Name':'401-500 km','Rate':5000,'Type':'RATE','Unit':'MT','Min':401,'Max':500 },
+    { 'Parameter Name':'Distance','Subcategory':'Distance','Option ID':'DIST006','Option Name':'501-600 km','Rate':5500,'Type':'RATE','Unit':'MT','Min':501,'Max':600 },
+    { 'Parameter Name':'Distance','Subcategory':'Distance','Option ID':'DIST007','Option Name':'601-700 km','Rate':6000,'Type':'RATE','Unit':'MT','Min':601,'Max':700 },
+    { 'Parameter Name':'Distance','Subcategory':'Distance','Option ID':'DIST008','Option Name':'701-800 km','Rate':6500,'Type':'RATE','Unit':'MT','Min':701,'Max':800 }
+];
+const BOOTSTRAP_PAINT = [
+    { 'Parameter Name':'Paint','Subcategory':'Paint Type','Option ID':'PAINT001','Option Name':'Primer + Enamel','Rate':3800,'Type':'RATE','Unit':'MT','Min':'','Max':'' },
+    { 'Parameter Name':'Paint','Subcategory':'Paint Type','Option ID':'PAINT002','Option Name':'Primer + Epoxy', 'Rate':4700,'Type':'RATE','Unit':'MT','Min':'','Max':'' },
+    { 'Parameter Name':'Paint','Subcategory':'Paint Type','Option ID':'PAINT003','Option Name':'PU',             'Rate':0,   'Type':'RATE','Unit':'MT','Min':'','Max':'' }
+];
+
+// Required columns in the canonical order. If any are missing from the sheet,
+// they get added to the header on bootstrap.
+const REQUIRED_COLUMNS = ['Parameter Name','Subcategory','Option ID','Option Name','Rate','Type','Unit','Min','Max'];
+
+// Write rows back to OneDrive, preserving column order
+async function writeWorkbookToOneDrive(workbook) {
+    const targetEmail = process.env.TARGET_USER_EMAIL;
+    const outBuffer = xlsx.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+    await graphClient
+        .api(`/users/${targetEmail}/drive/root${MASTER_FILE_PATH}/content`)
+        .put(outBuffer);
+}
+
+// Returns true if the workbook was modified
+async function bootstrapMissingDefaults(workbook, sheetName) {
+    const sheet = workbook.Sheets[sheetName];
+    const rawData = xlsx.utils.sheet_to_json(sheet);
+    const headerRow = (xlsx.utils.sheet_to_json(sheet, { header: 1 })[0] || []).map(String);
+
+    const existingParams = new Set(rawData.map(r => String(r['Parameter Name'] || '').trim().toLowerCase()));
+    let changed = false;
+
+    if (!existingParams.has('distance')) {
+        rawData.push(...BOOTSTRAP_DISTANCE);
+        changed = true;
+        console.log('🔧 Bootstrapping: added 8 Distance band rows');
+    }
+    if (!existingParams.has('paint')) {
+        rawData.push(...BOOTSTRAP_PAINT);
+        changed = true;
+        console.log('🔧 Bootstrapping: added 3 Paint type rows');
+    }
+
+    // Make sure all required columns are in the header (Min/Max especially)
+    let header = headerRow.slice();
+    REQUIRED_COLUMNS.forEach(col => {
+        if (!header.includes(col)) {
+            header.push(col);
+            changed = true;
+        }
+    });
+
+    if (changed) {
+        const newSheet = xlsx.utils.json_to_sheet(rawData, { header });
+        workbook.Sheets[sheetName] = newSheet;
+    }
+
+    return changed;
+}
+
 // Helper: simple admin gate (checks header OR body field)
 function isAdmin(req) {
     if (!ADMIN_PASSWORD) return true; // open mode
@@ -88,9 +158,20 @@ app.get('/api/master-data', async (req, res) => {
         res.set('Pragma', 'no-cache');
         res.set('Expires', '0');
 
-        const buffer = await downloadMasterBuffer();
-        const workbook = xlsx.read(buffer, { type: 'buffer' });
-        const sheetName = pickDataSheet(workbook);
+        let buffer = await downloadMasterBuffer();
+        let workbook = xlsx.read(buffer, { type: 'buffer' });
+        let sheetName = pickDataSheet(workbook);
+
+        // Bootstrap defaults (Distance, Paint) if missing
+        const bootstrapped = await bootstrapMissingDefaults(workbook, sheetName);
+        if (bootstrapped) {
+            await writeWorkbookToOneDrive(workbook);
+            // Re-download so subsequent reads see the persisted version
+            buffer = await downloadMasterBuffer();
+            workbook = xlsx.read(buffer, { type: 'buffer' });
+            sheetName = pickDataSheet(workbook);
+        }
+
         const rawData = xlsx.utils.sheet_to_json(workbook.Sheets[sheetName]);
 
         // Hide Secondary parameter as a safety net — Excel may still have it
@@ -349,6 +430,112 @@ app.post('/api/update-master-data', async (req, res) => {
 // =============================================================
 // 6. Status / Health Check
 // =============================================================
+// =============================================================
+// 6. ROUTE: Add a new Paint Type row to the master sheet
+// Body: { name, rate, adminPassword? }
+// =============================================================
+app.post('/api/add-paint-type', async (req, res) => {
+    try {
+        if (!isAdmin(req)) return res.status(401).json({ success: false, error: 'Unauthorised' });
+
+        const { name, rate } = req.body;
+        if (!name || typeof name !== 'string' || !name.trim()) {
+            return res.status(400).json({ success: false, error: 'Paint name required' });
+        }
+        const numRate = Number(rate);
+        if (!Number.isFinite(numRate) || numRate < 0) {
+            return res.status(400).json({ success: false, error: 'Rate must be a non-negative number' });
+        }
+
+        const buffer = await downloadMasterBuffer();
+        const workbook = xlsx.read(buffer, { type: 'buffer' });
+        const sheetName = pickDataSheet(workbook);
+        const sheet = workbook.Sheets[sheetName];
+        const rawData = xlsx.utils.sheet_to_json(sheet);
+
+        // Check duplicate name (case-insensitive)
+        const trimmedName = name.trim();
+        const exists = rawData.some(r =>
+            String(r['Parameter Name'] || '').trim().toLowerCase() === 'paint' &&
+            String(r['Option Name'] || '').trim().toLowerCase() === trimmedName.toLowerCase()
+        );
+        if (exists) {
+            return res.status(400).json({ success: false, error: `A paint type called "${trimmedName}" already exists` });
+        }
+
+        // Generate next Paint ID (PAINTnnn)
+        const existingIds = rawData
+            .filter(r => String(r['Parameter Name'] || '').trim().toLowerCase() === 'paint')
+            .map(r => String(r['Option ID'] || ''));
+        let n = 1;
+        while (existingIds.includes(`PAINT${String(n).padStart(3, '0')}`)) n++;
+        const newId = `PAINT${String(n).padStart(3, '0')}`;
+
+        rawData.push({
+            'Parameter Name': 'Paint',
+            'Subcategory': 'Paint Type',
+            'Option ID': newId,
+            'Option Name': trimmedName,
+            'Rate': numRate,
+            'Type': 'RATE',
+            'Unit': 'MT',
+            'Min': '',
+            'Max': ''
+        });
+
+        // Preserve column order
+        let header = (xlsx.utils.sheet_to_json(sheet, { header: 1 })[0] || []).map(String);
+        REQUIRED_COLUMNS.forEach(col => { if (!header.includes(col)) header.push(col); });
+        const newSheet = xlsx.utils.json_to_sheet(rawData, { header });
+        workbook.Sheets[sheetName] = newSheet;
+
+        await writeWorkbookToOneDrive(workbook);
+        res.json({ success: true, id: newId, name: trimmedName, rate: numRate });
+    } catch (error) {
+        console.error('Add Paint Type Error:', error.message);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// =============================================================
+// 7. ROUTE: Delete a Paint Type row from the master sheet
+// Body: { id, adminPassword? }
+// =============================================================
+app.post('/api/delete-paint-type', async (req, res) => {
+    try {
+        if (!isAdmin(req)) return res.status(401).json({ success: false, error: 'Unauthorised' });
+
+        const { id } = req.body;
+        if (!id) return res.status(400).json({ success: false, error: 'Paint Option ID required' });
+
+        const buffer = await downloadMasterBuffer();
+        const workbook = xlsx.read(buffer, { type: 'buffer' });
+        const sheetName = pickDataSheet(workbook);
+        const sheet = workbook.Sheets[sheetName];
+        let rawData = xlsx.utils.sheet_to_json(sheet);
+
+        const before = rawData.length;
+        rawData = rawData.filter(r => !(
+            String(r['Parameter Name'] || '').trim().toLowerCase() === 'paint' &&
+            String(r['Option ID'] || '') === String(id)
+        ));
+        if (rawData.length === before) {
+            return res.status(404).json({ success: false, error: `No Paint row with Option ID "${id}" found` });
+        }
+
+        let header = (xlsx.utils.sheet_to_json(sheet, { header: 1 })[0] || []).map(String);
+        REQUIRED_COLUMNS.forEach(col => { if (!header.includes(col)) header.push(col); });
+        const newSheet = xlsx.utils.json_to_sheet(rawData, { header });
+        workbook.Sheets[sheetName] = newSheet;
+
+        await writeWorkbookToOneDrive(workbook);
+        res.json({ success: true, deletedId: id });
+    } catch (error) {
+        console.error('Delete Paint Type Error:', error.message);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
 app.get('/api/status', (req, res) => res.send("OK"));
 app.get('/api/health', (req, res) => res.json({ ok: true, time: new Date().toISOString() }));
 

@@ -112,6 +112,7 @@ body { font-family: 'Segoe UI', Tahoma, sans-serif; background: var(--brand-grey
 
 /* Settings rate editor */
 .rate-row { display: grid; grid-template-columns: 1fr 1.5fr 90px 140px; gap: 10px; align-items: center; padding: 6px 0; border-bottom: 1px solid #f0f0f0; font-size: 13px; }
+.rate-row.paint-row { grid-template-columns: 1fr 1.5fr 90px 140px 110px; }
 .rate-row.head { font-weight: 700; color: #666; font-size: 11px; text-transform: uppercase; border-bottom: 2px solid var(--brand-grey-200); }
 .rate-input { padding: 6px 10px; border: 1px solid #ced4da; border-radius: 4px; font-family: monospace; text-align: right; }
 .rate-input.dirty { background: #fff3cd; border-color: #f0ad4e; }
@@ -1265,27 +1266,105 @@ function renderRatesEditor() {
   Object.entries(MASTER_DB).forEach(([pname, node]) => {
     if (node.__virtual) return; // Erection is JS-side, not in Excel
     const subs = node.subs || {};
+    const isPaint = pname.trim().toLowerCase() === 'paint';
     const det = document.createElement('details');
     det.className = 'cat-group';
-    det.open = false;
+    det.open = isPaint; // open Paint by default since it has add/delete
     let inner = `<summary>${pname} <span style="color:#888; font-weight:normal; font-size:12px;">(${node.__unit || ''})</span></summary><div style="margin-top:12px;">`;
-    inner += `<div class="rate-row head"><div>Subcategory</div><div>Option</div><div style="text-align:center">Type</div><div style="text-align:right">Rate / %</div></div>`;
+    inner += `<div class="rate-row head"><div>Subcategory</div><div>Option</div><div style="text-align:center">Type</div><div style="text-align:right">Rate / %</div>${isPaint ? '<div style="text-align:center">Action</div>' : ''}</div>`;
     Object.entries(subs).forEach(([sub, opts]) => {
       opts.forEach(o => {
         const r = o.rate || 0;
         const t = o.type || 'RATE';
-        inner += `<div class="rate-row">
+        const deleteBtn = isPaint
+          ? `<button class="btn btn-secondary" style="padding:4px 10px; font-size:11px;" onclick="deletePaintType('${o.id}', '${(o.name || '').replace(/'/g, "\\'")}')">🗑 Delete</button>`
+          : '';
+        const rowClass = isPaint ? 'rate-row paint-row' : 'rate-row';
+        inner += `<div class="${rowClass}">
           <div>${sub}</div>
           <div>${o.name}</div>
           <div style="text-align:center"><span class="type-tag ${t}">${t}</span></div>
           <input type="number" class="rate-input" data-id="${o.id}" data-original="${r}" value="${r}" step="0.01" oninput="markDirty(this)">
+          ${isPaint ? `<div style="text-align:center">${deleteBtn}</div>` : ''}
         </div>`;
       });
     });
+    if (isPaint) {
+      inner += `<div style="margin-top:12px; padding-top:12px; border-top:1px dashed #dee2e6;">
+        <button class="btn btn-primary" style="padding:8px 16px;" onclick="showAddPaintModal()">+ Add Paint Type</button>
+      </div>`;
+    }
     inner += `</div>`;
     det.innerHTML = inner;
     c.appendChild(det);
   });
+}
+
+// =========================================================
+// ADD / DELETE PAINT TYPE
+// =========================================================
+function showAddPaintModal() {
+  const name = prompt('New Paint Type name (e.g. "Marine Grade Epoxy"):');
+  if (!name || !name.trim()) return;
+  const rateStr = prompt(`Rate for "${name.trim()}" in ₹/MT:`);
+  if (rateStr === null) return;
+  const rate = parseFloat(rateStr);
+  if (!isFinite(rate) || rate < 0) {
+    toast('❌ Rate must be a non-negative number', 'err');
+    return;
+  }
+  addPaintType(name.trim(), rate);
+}
+
+async function addPaintType(name, rate) {
+  try {
+    const headers = { 'Content-Type': 'application/json' };
+    if (adminPassword) headers['x-admin-password'] = adminPassword;
+    const res = await fetch(`${RENDER_URL}/api/add-paint-type`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ name, rate })
+    });
+    const data = await res.json();
+    if (res.status === 401) {
+      adminPassword = '';
+      toast('❌ Session expired — please re-enter password', 'err');
+      showPwModal();
+      return;
+    }
+    if (!data.success) throw new Error(data.error || 'Add failed');
+    toast(`✅ Added "${data.name}" (₹${data.rate}/MT)`, 'ok');
+    await loadDB(false);   // refresh MASTER_DB so new option appears in dropdown
+    renderRatesEditor();
+  } catch (e) {
+    toast('❌ Add failed: ' + e.message, 'err', 5000);
+  }
+}
+
+async function deletePaintType(id, name) {
+  if (!confirm(`Delete paint type "${name}"?\n\nThis cannot be undone. Existing saved quotations using this paint will still load (the rate is captured at save time).`)) return;
+  try {
+    const headers = { 'Content-Type': 'application/json' };
+    if (adminPassword) headers['x-admin-password'] = adminPassword;
+    const res = await fetch(`${RENDER_URL}/api/delete-paint-type`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ id })
+    });
+    const data = await res.json();
+    if (res.status === 401) {
+      adminPassword = '';
+      toast('❌ Session expired — please re-enter password', 'err');
+      showPwModal();
+      return;
+    }
+    if (!data.success) throw new Error(data.error || 'Delete failed');
+    toast(`✅ Deleted "${name}"`, 'ok');
+    await loadDB(false);
+    renderRatesEditor();
+  } catch (e) {
+    toast('❌ Delete failed: ' + e.message, 'err', 5000);
+  }
 }
 
 function markDirty(input) {

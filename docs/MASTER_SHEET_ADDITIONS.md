@@ -1,69 +1,61 @@
-# Rows to Add to Master_Cost_DB.xlsx
+# Master_Cost_DB.xlsx — v5 Auto-Bootstrap
 
-You need to add new rows for **Distance** and **Paint**. **Erection charges are hardcoded in the app** — they don't go in Excel.
+**You don't need to edit Excel manually anymore.** The app handles Distance and Paint setup automatically.
 
-## Important: where these appear in the app
+## What happens on first run
 
-Distance and Paint are **project-wide charges** — picked once on **Step 1**, applied to the whole project. They do **NOT** appear as parameters in the Step 2 sidebar. The Excel rows below feed the Step 1 dropdowns:
+1. The app boots and calls `/api/master-data`
+2. The server checks if your sheet has `Distance` and `Paint` parameters
+3. If missing, it auto-writes the default rows below back to OneDrive
+4. Required columns (`Min`, `Max`) get added to the header if not already there
+5. From then on, everything reads from your sheet normally
 
-- **Paint Type** → dropdown on Step 1, populated from your Paint rows
-- **Distance Band** → readonly display on Step 1, auto-matched to the km you enter
+The console log will show: `🔧 Bootstrapping: added 8 Distance band rows` and `🔧 Bootstrapping: added 3 Paint type rows` on first hit.
 
-You can still edit their rates from the **⚙ Settings** page in the app.
+## What gets auto-written
 
-## Schema reminder
+### Distance (8 banded rows)
 
-Your sheet currently has columns: `Parameter Name | Subcategory | Option ID | Option Name | Rate | Type | Unit`
+Used by Step 1's "Distance Band" auto-display. Rates editable from Settings.
 
-Add **two new columns** if not already present: **`Min`** and **`Max`** (used by Distance bands). Leave them blank for everything else.
+| ID | Name | Rate (₹/MT) | Min | Max |
+|---|---|---|---|---|
+| DIST001 | 0–100 km    | 1500 | 0   | 100 |
+| DIST002 | 101–200 km  | 2500 | 101 | 200 |
+| DIST003 | 201–300 km  | 3500 | 201 | 300 |
+| DIST004 | 301–400 km  | 4500 | 301 | 400 |
+| DIST005 | 401–500 km  | 5000 | 401 | 500 |
+| DIST006 | 501–600 km  | 5500 | 501 | 600 |
+| DIST007 | 601–700 km  | 6000 | 601 | 700 |
+| DIST008 | 701–800 km  | 6500 | 701 | 800 |
 
-## Updated header row
+### Paint (3 starter rows)
 
-| Parameter Name | Subcategory | Option ID | Option Name | Rate | Type | Unit | Min | Max |
-|---|---|---|---|---|---|---|---|---|
+Used by Step 1's "Paint Type" dropdown. Rates editable, **and** new paint types can be added from Settings → "+ Add Paint Type" button.
 
-## 1. Distance (8 banded rows)
+| ID | Name | Rate (₹/MT) |
+|---|---|---|
+| PAINT001 | Primer + Enamel | 3800 |
+| PAINT002 | Primer + Epoxy  | 4700 |
+| PAINT003 | PU              | 0 (placeholder — edit later) |
 
-The system reads `Distance from Vichoor (km)` on Step 1, finds the row whose `Min ≤ km ≤ Max`, and auto-displays the matched rate. Charged per MT × Steel Tonnage.
+## Erection — still hardcoded
 
-| Parameter Name | Subcategory | Option ID | Option Name | Rate | Type | Unit | Min | Max |
-|---|---|---|---|---|---|---|---|---|
-| Distance | Distance | DIST001 | 0–100 km    | 1500 | RATE | MT | 0   | 100 |
-| Distance | Distance | DIST002 | 101–200 km  | 2500 | RATE | MT | 101 | 200 |
-| Distance | Distance | DIST003 | 201–300 km  | 3500 | RATE | MT | 201 | 300 |
-| Distance | Distance | DIST004 | 301–400 km  | 4500 | RATE | MT | 301 | 400 |
-| Distance | Distance | DIST005 | 401–500 km  | 5000 | RATE | MT | 401 | 500 |
-| Distance | Distance | DIST006 | 501–600 km  | 5500 | RATE | MT | 501 | 600 |
-| Distance | Distance | DIST007 | 601–700 km  | 6000 | RATE | MT | 601 | 700 |
-| Distance | Distance | DIST008 | 701–800 km  | 6500 | RATE | MT | 701 | 800 |
+Erection charges live in the app code, not Excel. Auto-applied based on:
+- **Step 1 dropdown:** Safety → Standard ₹9,000 / Intermediate ₹12,000 / Advanced ₹14,000
+- **Step 1 auto-band:** Building Height → ≤10m: ₹0 / ≤15m: ₹1500 / ≤20m: ₹3000
 
-## 2. Paint (3 rows)
+To change Erection rates, you need a code change. Tell me when you want them moved to Excel and I'll wire it up.
 
-Populates the Paint Type dropdown on Step 1. PU rate is `0` for now — edit later from the Settings page in the app.
+## What you can do from Settings
 
-| Parameter Name | Subcategory | Option ID | Option Name | Rate | Type | Unit | Min | Max |
-|---|---|---|---|---|---|---|---|---|
-| Paint | Paint Type | PAINT001 | Primer + Enamel | 3800 | RATE | MT |  |  |
-| Paint | Paint Type | PAINT002 | Primer + Epoxy  | 4700 | RATE | MT |  |  |
-| Paint | Paint Type | PAINT003 | PU              | 0    | RATE | MT |  |  |
+| Action | Distance | Paint | Other params |
+|---|---|---|---|
+| Edit rate | ✅ | ✅ | ✅ |
+| Add new option | ❌ (bands fixed) | ✅ + Add Paint Type | ❌ (manual Excel) |
+| Delete option | ❌ | ✅ 🗑 Delete button per row | ❌ |
+| Edit Min/Max | ❌ (Excel only) | n/a | n/a |
 
-## 3. Erection — NOT in Excel
+## Hidden parameters
 
-Erection charges live in the app code, not the master sheet. They appear automatically in the final quotation based on:
-- **Step 1 dropdown:** Safety Type → Standard ₹9,000 / Intermediate ₹12,000 / Advanced ₹14,000
-- **Step 1 auto-band:** Building Height → 0–10m: ₹0 / 10–15m: ₹1500 / 15–20m: ₹3000
-
-To change Erection rates later, you'll need a code change. If you want them moved to Excel, ping me.
-
-## Step 2 sidebar after this update
-
-The sidebar in Step 2 will only show Excel parameters that are NOT Distance, Paint, or Secondary. Typically: Raw Material, Sheet Cost, and any other parameters you have.
-
-## Final quotation layout
-
-The final preview/PDF/Excel will show:
-1. Your Step 2 parameters (Raw Material, etc.) with their subcategories
-2. **Distance** (auto-injected from Step 1, charged per MT × tonnage)
-3. **Paint** (auto-injected from Step 1, charged per MT × tonnage, only if you picked one)
-4. **Erection** (auto-injected from Step 1, two lines: Safety + Height Surcharge, both per MT × tonnage)
-5. Subtotal → Margin → GST → Grand Total
+`Secondary` is hidden server-side. To show or hide other parameters, edit `HIDDEN_PARAMETERS` in `server.js` line ~165.
