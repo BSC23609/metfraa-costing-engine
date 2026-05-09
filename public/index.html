@@ -610,6 +610,9 @@ function findBandedOption(opts, value) {
 }
 
 function loadWorkspace(name, el) {
+  // Always capture latest Step 1 values so transport/erection rates are never undefined
+  captureProjectDetails();
+
   activeP = name;
   document.querySelectorAll('.param-item').forEach(i => i.classList.remove('active'));
   el.classList.add('active');
@@ -665,11 +668,11 @@ function loadWorkspace(name, el) {
   `;
   body.appendChild(qtyRow);
 
-  const trRate = unit === 'MT' ? projectState.details.trOutMT
+  const trRate = (unit === 'MT' ? projectState.details.trOutMT
               : unit === 'sqm' ? projectState.details.trOutSqm
-              : unit === 'rmt' ? projectState.details.trOutRmt : 0;
+              : unit === 'rmt' ? projectState.details.trOutRmt : 0) || 0;
   const dist = projectState.details.dist || parseFloat(document.getElementById('projDist').value) || 0;
-  const trUnitRate = (trRate || 0) * dist;
+  const trUnitRate = trRate * dist;
   const trRow = document.createElement('tr');
   trRow.style.background = '#e8f5e9';
   trRow.innerHTML = `
@@ -755,11 +758,11 @@ function sync() {
     row.querySelector('.l-v').innerText = lineLabel;
   });
 
-  const trRate = unit === 'MT' ? projectState.details.trOutMT
+  const trRate = (unit === 'MT' ? projectState.details.trOutMT
               : unit === 'sqm' ? projectState.details.trOutSqm
-              : unit === 'rmt' ? projectState.details.trOutRmt : 0;
+              : unit === 'rmt' ? projectState.details.trOutRmt : 0) || 0;
   const dist = projectState.details.dist || 0;
-  const trPerUnit = (trRate || 0) * dist;
+  const trPerUnit = trRate * dist;
   const trLine = trPerUnit * qty;
   const trCell = document.getElementById('trOutLine');
   if (trCell) trCell.innerText = qty > 0 ? fmtINR(trLine) : '—';
