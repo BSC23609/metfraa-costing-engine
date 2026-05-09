@@ -193,26 +193,29 @@ body { font-family: 'Segoe UI', Tahoma, sans-serif; background: var(--brand-grey
         <div class="form-field"><label class="form-label">Design Included</label><select id="projDesign" class="form-select"><option>Yes</option><option>No</option></select></div>
       </div>
 
-      <div class="section-title" style="margin-top:24px;">Transport Rates (App-side calculation)</div>
+      <div class="section-title" style="margin-top:24px;">Project-wide Charges (App-side calculation)</div>
       <div class="form-grid">
-        <div class="form-field"><label class="form-label">Transport Inward (₹/MT/km)</label><input type="number" id="trIn" class="form-input" value="0" step="0.1"></div>
-        <div class="form-field"><label class="form-label">Outward — MT (₹/MT/km)</label><input type="number" id="trOutMT" class="form-input" value="10" step="0.1"></div>
-        <div class="form-field"><label class="form-label">Outward — sqm (₹/sqm/km)</label><input type="number" id="trOutSqm" class="form-input" value="0.04" step="0.001"></div>
-        <div class="form-field"><label class="form-label">Outward — rmt (₹/rmt/km)</label><input type="number" id="trOutRmt" class="form-input" value="0.04" step="0.001"></div>
-      </div>
-
-      <div class="section-title" style="margin-top:24px;">Erection Charges (App-side calculation)</div>
-      <div class="form-grid">
-        <div class="form-field"><label class="form-label">Safety Type</label>
+        <div class="form-field"><label class="form-label">Paint Type</label>
+          <select id="paintSelect" class="form-select">
+            <option value="">— loading —</option>
+          </select>
+        </div>
+        <div class="form-field"><label class="form-label">Distance Band (auto from km above)</label>
+          <input type="text" id="distBandDisplay" class="form-input" readonly style="background:#f0f0f0; cursor:not-allowed;" value="—">
+        </div>
+        <div class="form-field"><label class="form-label">Erection Safety Type</label>
           <select id="erSafety" class="form-select">
             <option value="9000">Standard (₹9,000/MT)</option>
             <option value="12000">Intermediate (₹12,000/MT)</option>
             <option value="14000">Advanced (₹14,000/MT)</option>
           </select>
         </div>
-        <div class="form-field"><label class="form-label">Height Surcharge (auto from Building Height)</label>
+        <div class="form-field"><label class="form-label">Erection Height Surcharge (auto from height)</label>
           <input type="text" id="erHeightDisplay" class="form-input" readonly style="background:#f0f0f0; cursor:not-allowed;" value="—">
         </div>
+      </div>
+      <div style="font-size:11px; color:#6c757d; margin-top:8px;">
+        ℹ All four are charged <strong>per MT × Steel Tonnage</strong> and apply to the whole project. Paint and Distance rates are editable from <strong>⚙ Settings</strong>.
       </div>
 
       <div class="section-title" style="margin-top:24px;">Financial Parameters</div>
@@ -320,6 +323,81 @@ function updateErectionHeightDisplay() {
 }
 
 // =========================================================
+// DISTANCE BAND (Excel-driven, auto-matched from km input)
+// =========================================================
+function findBandedOption(opts, value) {
+  if (!opts) return null;
+  return opts.find(o => {
+    if (o.min === undefined && o.max === undefined) return false;
+    const min = o.min !== undefined ? o.min : -Infinity;
+    const max = o.max !== undefined ? o.max : Infinity;
+    return value >= min && value <= max;
+  });
+}
+
+function getDistanceBand() {
+  const km = parseFloat(document.getElementById('projDist').value) || 0;
+  const node = MASTER_DB['Distance'];
+  if (!node || !node.subs) return null;
+  // Distance has one subcategory; flatten all options across subs just in case
+  const allOpts = Object.values(node.subs).flat();
+  const matched = findBandedOption(allOpts, km);
+  if (!matched) return null;
+  return { id: matched.id, name: matched.name, rate: matched.rate, km };
+}
+
+function updateDistanceBandDisplay() {
+  const band = getDistanceBand();
+  const el = document.getElementById('distBandDisplay');
+  if (!band) {
+    el.value = MASTER_DB['Distance']
+      ? 'No band matches this km — check Distance rows in master sheet'
+      : 'Distance parameter not in master sheet';
+    return;
+  }
+  el.value = `${band.name} → ₹${band.rate.toLocaleString('en-IN')}/MT`;
+}
+
+// =========================================================
+// PAINT DROPDOWN (Excel-driven, populated from MASTER_DB.Paint)
+// =========================================================
+function populatePaintDropdown() {
+  const sel = document.getElementById('paintSelect');
+  const node = MASTER_DB['Paint'];
+  const prevValue = sel.value; // preserve selection across refreshes
+  sel.innerHTML = '';
+  if (!node || !node.subs) {
+    sel.innerHTML = '<option value="">— Paint not in master sheet —</option>';
+    return;
+  }
+  // Add a "none" option first so user can opt out
+  sel.innerHTML = '<option value="">— None —</option>';
+  Object.values(node.subs).flat().forEach(o => {
+    const opt = document.createElement('option');
+    opt.value = o.id;
+    opt.dataset.rate = o.rate;
+    opt.dataset.name = o.name;
+    opt.textContent = `${o.name} (₹${(o.rate || 0).toLocaleString('en-IN')}/MT)`;
+    sel.appendChild(opt);
+  });
+  // Restore previous selection if it still exists
+  if (prevValue && [...sel.options].some(o => o.value === prevValue)) {
+    sel.value = prevValue;
+  }
+}
+
+function getPaintSelection() {
+  const sel = document.getElementById('paintSelect');
+  if (!sel.value) return null;
+  const opt = sel.options[sel.selectedIndex];
+  return {
+    id: sel.value,
+    name: opt.dataset.name,
+    rate: parseFloat(opt.dataset.rate) || 0
+  };
+}
+
+// =========================================================
 // TOAST
 // =========================================================
 function toast(msg, type='info', ms=3000) {
@@ -374,8 +452,9 @@ async function submitPw() {
 // =========================================================
 window.onload = async () => {
   document.getElementById('projDate').valueAsDate = new Date();
-  // Erection height surcharge updates live as user changes building height
+  // Live updates as user changes Step 1 inputs
   document.getElementById('projHeight').addEventListener('input', updateErectionHeightDisplay);
+  document.getElementById('projDist').addEventListener('input', updateDistanceBandDisplay);
   updateErectionHeightDisplay();
   await checkAuthMode();
   await loadDB(false);
@@ -406,6 +485,8 @@ async function loadDB(showRefreshToast) {
     banner.style.display = 'block';
 
     initSidebar();
+    populatePaintDropdown();
+    updateDistanceBandDisplay();
     document.getElementById('nextBtn').disabled = false;
 
     // If currently in Settings, re-render the rate editor
@@ -472,16 +553,21 @@ async function loadQuotation() {
     document.getElementById('projDesign').value = d.design || 'Yes';
     document.getElementById('projMargin').value = d.margin || 12;
     document.getElementById('projGST').value = d.gst || 18;
-    document.getElementById('trIn').value = d.trIn || 0;
-    document.getElementById('trOutMT').value = d.trOutMT || 10;
-    document.getElementById('trOutSqm').value = d.trOutSqm || 0.04;
-    document.getElementById('trOutRmt').value = d.trOutRmt || 0.04;
 
     // Restore erection safety; height surcharge auto-recomputes from building height
     if (d.erSafetyRate !== undefined) {
       document.getElementById('erSafety').value = String(d.erSafetyRate);
     }
     updateErectionHeightDisplay();
+
+    // Restore Paint dropdown selection (and Distance is auto-computed from km)
+    if (d.paintId) {
+      const psel = document.getElementById('paintSelect');
+      if ([...psel.options].some(o => o.value === d.paintId)) {
+        psel.value = d.paintId;
+      }
+    }
+    updateDistanceBandDisplay();
 
     projectState.details = d;
     projectState.qtys = saved.qtys || {};
@@ -532,6 +618,9 @@ function captureProjectDetails() {
   const erSafetyRate = parseFloat(erSafetySel.value) || 0;
   const erSafetyLabel = erSafetySel.options[erSafetySel.selectedIndex].text;
 
+  const distBand = getDistanceBand(); // null if no Distance in master DB or no match
+  const paintSel = getPaintSelection(); // null if "None" picked or Paint missing
+
   projectState.details = {
     ref: document.getElementById('projRef').value || 'Met/est/2026/XX',
     date: document.getElementById('projDate').value,
@@ -546,11 +635,13 @@ function captureProjectDetails() {
     design: document.getElementById('projDesign').value,
     margin: parseFloat(document.getElementById('projMargin').value) || 0,
     gst: parseFloat(document.getElementById('projGST').value) || 0,
-    trIn: parseFloat(document.getElementById('trIn').value) || 0,
-    trOutMT: parseFloat(document.getElementById('trOutMT').value) || 0,
-    trOutSqm: parseFloat(document.getElementById('trOutSqm').value) || 0,
-    trOutRmt: parseFloat(document.getElementById('trOutRmt').value) || 0,
-    // Erection (app-side calculated, charged per MT × tonnage)
+    // Project-wide auto-charges (all per MT × tonnage)
+    distBandId: distBand ? distBand.id : null,
+    distBandName: distBand ? distBand.name : null,
+    distBandRate: distBand ? distBand.rate : 0,
+    paintId: paintSel ? paintSel.id : null,
+    paintName: paintSel ? paintSel.name : null,
+    paintRate: paintSel ? paintSel.rate : 0,
     erSafetyLabel,
     erSafetyRate,
     erHeightLabel: erHeightBand.label,
@@ -567,9 +658,13 @@ function fmtNum(n, dp=2) { return (n || 0).toLocaleString('en-IN', {maximumFract
 function initSidebar() {
   const sb = document.getElementById('sidebar');
   sb.innerHTML = '';
+  // These parameters are handled on Step 1, not in the Step 2 sidebar
+  const STEP1_MANAGED = new Set(['distance', 'paint']);
   Object.keys(MASTER_DB).forEach(p => {
     // Skip virtual parameters (Erection is computed app-side, not user-edited)
     if (MASTER_DB[p] && MASTER_DB[p].__virtual) return;
+    // Skip parameters managed entirely on Step 1
+    if (STEP1_MANAGED.has(p.trim().toLowerCase())) return;
     if (!projectState.selections[p]) projectState.selections[p] = {};
     if (projectState.qtys[p] === undefined) projectState.qtys[p] = '';
     const div = document.createElement('div');
@@ -598,17 +693,6 @@ function refreshSidebarStatus() {
 // =========================================================
 // WORKSPACE
 // =========================================================
-// Find option whose [min, max] range contains value (for banded params like Distance)
-function findBandedOption(opts, value) {
-  if (!opts) return null;
-  return opts.find(o => {
-    if (o.min === undefined && o.max === undefined) return false;
-    const min = o.min !== undefined ? o.min : -Infinity;
-    const max = o.max !== undefined ? o.max : Infinity;
-    return value >= min && value <= max;
-  });
-}
-
 function loadWorkspace(name, el) {
   // Always capture latest Step 1 values so transport/erection rates are never undefined
   captureProjectDetails();
@@ -620,35 +704,7 @@ function loadWorkspace(name, el) {
   document.getElementById('activeTitle').innerText = name;
   document.getElementById('activeUnitInfo').innerText = `Unit: ${unit}`;
 
-  // Hint for auto-banded params
-  const helpEl = document.getElementById('paramHelp');
-  if (name.trim().toLowerCase() === 'distance') {
-    const km = projectState.details.dist || parseFloat(document.getElementById('projDist').value) || 0;
-    helpEl.innerHTML = `<strong>Auto-banded:</strong> Distance band selected based on <strong>${km} km</strong> from Step 1. You can override the selection manually if needed.`;
-  } else {
-    helpEl.innerHTML = `<strong>How it works:</strong> Each row = a subcategory. RATE rows add ₹ directly per unit. PERCENT rows (Wastages, Overlap) apply % to RAW MATERIAL / SHEET COST cost. The "Qty" applies to the whole parameter — it's the same for every row.`;
-  }
-
-  // ----- Distance auto-banding: find the band matching projDist and pre-select it -----
-  if (name.trim().toLowerCase() === 'distance') {
-    const km = projectState.details.dist || parseFloat(document.getElementById('projDist').value) || 0;
-    const subs = MASTER_DB[name].subs || {};
-    Object.entries(subs).forEach(([sub, opts]) => {
-      const banded = findBandedOption(opts, km);
-      if (banded) {
-        // Only auto-pick if user hasn't already chosen something for this sub
-        const existing = projectState.selections[name] && projectState.selections[name][sub];
-        if (!existing || !existing.id) {
-          if (!projectState.selections[name]) projectState.selections[name] = {};
-          projectState.selections[name][sub] = {
-            id: banded.id, name: banded.name,
-            rate: banded.rate, type: 'RATE', perUnit: banded.rate,
-            qty: 0, line: 0
-          };
-        }
-      }
-    });
-  }
+  document.getElementById('paramHelp').innerHTML = `<strong>How it works:</strong> Each row = a subcategory. RATE rows add ₹ directly per unit. PERCENT rows (Wastages, Overlap) apply % to RAW MATERIAL / SHEET COST cost. The "Qty" applies to the whole parameter — it's the same for every row.`;
 
   // ----- Auto-fill quantity for MT-unit parameters from Steel Tonnage -----
   if (unit === 'MT' && !projectState.qtys[name]) {
@@ -667,22 +723,6 @@ function loadWorkspace(name, el) {
     <td class="cell-num">${unit}</td>
   `;
   body.appendChild(qtyRow);
-
-  const trRate = (unit === 'MT' ? projectState.details.trOutMT
-              : unit === 'sqm' ? projectState.details.trOutSqm
-              : unit === 'rmt' ? projectState.details.trOutRmt : 0) || 0;
-  const dist = projectState.details.dist || parseFloat(document.getElementById('projDist').value) || 0;
-  const trUnitRate = trRate * dist;
-  const trRow = document.createElement('tr');
-  trRow.style.background = '#e8f5e9';
-  trRow.innerHTML = `
-    <td>TRANSPORT OUTWARD <span class="tag-rate">AUTO</span></td>
-    <td style="font-style:italic; color:#555">${dist} km × ₹${trRate}/${unit}/km</td>
-    <td class="cell-num">${fmtINR(trUnitRate)}</td>
-    <td style="font-style:italic; color:#555">per ${unit}</td>
-    <td class="cell-num" id="trOutLine">—</td>
-  `;
-  body.appendChild(trRow);
 
   Object.entries(MASTER_DB[name].subs).forEach(([sub, opts]) => {
     const saved = projectState.selections[activeP][sub] || { id: '', rate: 0, line: 0, name: '', type: 'RATE' };
@@ -758,23 +798,6 @@ function sync() {
     row.querySelector('.l-v').innerText = lineLabel;
   });
 
-  const trRate = (unit === 'MT' ? projectState.details.trOutMT
-              : unit === 'sqm' ? projectState.details.trOutSqm
-              : unit === 'rmt' ? projectState.details.trOutRmt : 0) || 0;
-  const dist = projectState.details.dist || 0;
-  const trPerUnit = trRate * dist;
-  const trLine = trPerUnit * qty;
-  const trCell = document.getElementById('trOutLine');
-  if (trCell) trCell.innerText = qty > 0 ? fmtINR(trLine) : '—';
-  unitRateTotal += trPerUnit;
-  if (qty > 0) {
-    projectState.selections[activeP]['TRANSPORT OUTWARD'] = {
-      id: 'AUTO', name: `${dist} km × ₹${trRate}/${unit}/km`,
-      rate: trPerUnit, type: 'RATE', perUnit: trPerUnit,
-      qty, line: trLine, isAuto: true
-    };
-  }
-
   document.getElementById('paramUnitRateDisplay').innerText = fmtINR(unitRateTotal);
   document.getElementById('paramTotalDisplay').innerText = fmtINR(unitRateTotal * qty);
 
@@ -784,27 +807,58 @@ function sync() {
 // =========================================================
 // PREVIEW
 // =========================================================
-// Inject Erection charges as a virtual parameter (not from Excel)
-// Charged per MT × tonnage, with Safety + Height as two sub-lines
-function injectErectionVirtual() {
+// Inject project-wide auto-charges as virtual parameters.
+// Distance + Paint come from Excel (Step 1 dropdowns); Erection from JS.
+// All charged per MT × tonnage. None appear in the Step 2 sidebar.
+function injectVirtualParameters() {
   const d = projectState.details;
   const tonnage = d.tonnage || 0;
-  if (tonnage <= 0) {
-    // No tonnage = no erection charge
-    delete projectState.selections['Erection'];
-    delete projectState.qtys['Erection'];
-    if (MASTER_DB['Erection'] && MASTER_DB['Erection'].__virtual) delete MASTER_DB['Erection'];
-    return;
+
+  // Always clear any prior virtual entries so toggling Step 1 dropdowns has effect
+  ['Distance', 'Paint', 'Erection'].forEach(p => {
+    delete projectState.selections[p];
+    delete projectState.qtys[p];
+    if (MASTER_DB[p] && MASTER_DB[p].__virtual) delete MASTER_DB[p];
+  });
+
+  if (tonnage <= 0) return; // No tonnage = no per-MT charges
+
+  // Helper: register a virtual parameter
+  function addVirtual(paramName, lines) {
+    MASTER_DB[paramName] = MASTER_DB[paramName] || {};
+    MASTER_DB[paramName].__unit = 'MT';
+    MASTER_DB[paramName].__virtual = true;
+    MASTER_DB[paramName].subs = MASTER_DB[paramName].subs || {};
+    projectState.qtys[paramName] = String(tonnage);
+    projectState.selections[paramName] = lines;
   }
 
-  // Mark a virtual entry in MASTER_DB so preview/excel/pdf code finds the unit
-  MASTER_DB['Erection'] = MASTER_DB['Erection'] || {};
-  MASTER_DB['Erection'].__unit = 'MT';
-  MASTER_DB['Erection'].__virtual = true;
-  MASTER_DB['Erection'].subs = MASTER_DB['Erection'].subs || {};
+  // Distance (only if a band matched)
+  if (d.distBandRate > 0) {
+    addVirtual('Distance', {
+      'Distance Band': {
+        id: d.distBandId, name: d.distBandName,
+        rate: d.distBandRate, type: 'RATE', perUnit: d.distBandRate,
+        qty: tonnage, line: d.distBandRate * tonnage, isAuto: true
+      }
+    });
+  }
 
-  projectState.qtys['Erection'] = String(tonnage);
-  projectState.selections['Erection'] = {
+  // Paint (only if user picked an option)
+  if (d.paintRate > 0 || (d.paintId && d.paintRate >= 0)) {
+    if (d.paintId) {
+      addVirtual('Paint', {
+        'Paint Type': {
+          id: d.paintId, name: d.paintName,
+          rate: d.paintRate, type: 'RATE', perUnit: d.paintRate,
+          qty: tonnage, line: d.paintRate * tonnage, isAuto: true
+        }
+      });
+    }
+  }
+
+  // Erection (always — Safety has a non-zero rate, Height may be 0 for ≤10m)
+  addVirtual('Erection', {
     'Safety': {
       id: 'ER_SAFETY', name: d.erSafetyLabel,
       rate: d.erSafetyRate, type: 'RATE', perUnit: d.erSafetyRate,
@@ -815,12 +869,12 @@ function injectErectionVirtual() {
       rate: d.erHeightRate, type: 'RATE', perUnit: d.erHeightRate,
       qty: tonnage, line: d.erHeightRate * tonnage, isAuto: true
     }
-  };
+  });
 }
 
 function generatePreview() {
   captureProjectDetails();
-  injectErectionVirtual();
+  injectVirtualParameters();
   const d = projectState.details;
   let grandBase = 0;
 
@@ -932,7 +986,7 @@ function generatePreview() {
 // =========================================================
 function downloadExcel() {
   captureProjectDetails();
-  injectErectionVirtual();
+  injectVirtualParameters();
   const d = projectState.details;
   const wb = XLSX.utils.book_new();
   const rows = [];
@@ -997,7 +1051,7 @@ function downloadExcel() {
 // =========================================================
 function buildPDF() {
   captureProjectDetails();
-  injectErectionVirtual();
+  injectVirtualParameters();
   const { jsPDF } = window.jspdf;
   const d = projectState.details;
   const doc = new jsPDF({ unit: 'mm', format: 'a4' });
@@ -1146,7 +1200,7 @@ async function saveToOneDrive() {
   btn.innerHTML = "⏳<h3>Saving PDF + JSON…</h3>";
 
   captureProjectDetails();
-  injectErectionVirtual();
+  injectVirtualParameters();
   const d = projectState.details;
   if (!d.name || !d.date) {
     alert('❌ Project Name and Date are required to save.');

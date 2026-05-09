@@ -1,12 +1,21 @@
 # Rows to Add to Master_Cost_DB.xlsx
 
-You need to add new rows to your master sheet for **Distance** and **Paint** parameters. **Erection charges are hardcoded in the app** — they don't go in Excel.
+You need to add new rows for **Distance** and **Paint**. **Erection charges are hardcoded in the app** — they don't go in Excel.
+
+## Important: where these appear in the app
+
+Distance and Paint are **project-wide charges** — picked once on **Step 1**, applied to the whole project. They do **NOT** appear as parameters in the Step 2 sidebar. The Excel rows below feed the Step 1 dropdowns:
+
+- **Paint Type** → dropdown on Step 1, populated from your Paint rows
+- **Distance Band** → readonly display on Step 1, auto-matched to the km you enter
+
+You can still edit their rates from the **⚙ Settings** page in the app.
 
 ## Schema reminder
 
-Your sheet currently has these columns: `Parameter Name | Subcategory | Option ID | Option Name | Rate | Type | Unit`
+Your sheet currently has columns: `Parameter Name | Subcategory | Option ID | Option Name | Rate | Type | Unit`
 
-Two **new optional columns** need to be added if not already present: **`Min`** and **`Max`** (for the Distance bands). Leave them blank for all your existing rows.
+Add **two new columns** if not already present: **`Min`** and **`Max`** (used by Distance bands). Leave them blank for everything else.
 
 ## Updated header row
 
@@ -15,7 +24,7 @@ Two **new optional columns** need to be added if not already present: **`Min`** 
 
 ## 1. Distance (8 banded rows)
 
-The system reads `Distance from Vichoor (km)` on Step 1, finds the row whose `Min ≤ km ≤ Max`, and auto-selects it on Step 2. User can override.
+The system reads `Distance from Vichoor (km)` on Step 1, finds the row whose `Min ≤ km ≤ Max`, and auto-displays the matched rate. Charged per MT × Steel Tonnage.
 
 | Parameter Name | Subcategory | Option ID | Option Name | Rate | Type | Unit | Min | Max |
 |---|---|---|---|---|---|---|---|---|
@@ -30,7 +39,7 @@ The system reads `Distance from Vichoor (km)` on Step 1, finds the row whose `Mi
 
 ## 2. Paint (3 rows)
 
-User picks one option in Step 2. PU rate is `0` for now — edit later from the Settings page in the app.
+Populates the Paint Type dropdown on Step 1. PU rate is `0` for now — edit later from the Settings page in the app.
 
 | Parameter Name | Subcategory | Option ID | Option Name | Rate | Type | Unit | Min | Max |
 |---|---|---|---|---|---|---|---|---|
@@ -41,13 +50,20 @@ User picks one option in Step 2. PU rate is `0` for now — edit later from the 
 ## 3. Erection — NOT in Excel
 
 Erection charges live in the app code, not the master sheet. They appear automatically in the final quotation based on:
-- **Step 1 dropdown:** Safety Type → Standard ₹9000 / Intermediate ₹12000 / Advanced ₹14000
+- **Step 1 dropdown:** Safety Type → Standard ₹9,000 / Intermediate ₹12,000 / Advanced ₹14,000
 - **Step 1 auto-band:** Building Height → 0–10m: ₹0 / 10–15m: ₹1500 / 15–20m: ₹3000
 
-Both summed together, multiplied by Steel Tonnage. Two separate lines under "Erection" in the preview/PDF/Excel.
+To change Erection rates later, you'll need a code change. If you want them moved to Excel, ping me.
 
-To change these rates later, you'll need a code change — they're not editable from the Settings rate editor. If you want them moved to Excel later, ping me.
+## Step 2 sidebar after this update
 
-## How qty defaults work
+The sidebar in Step 2 will only show Excel parameters that are NOT Distance, Paint, or Secondary. Typically: Raw Material, Sheet Cost, and any other parameters you have.
 
-For any parameter with `Unit = MT`, the qty field in Step 2 will auto-fill to your **Steel Tonnage** value from Step 1. User can override per-parameter. So you don't have to type "100" eight times for Distance/Paint/etc — set tonnage on Step 1 once, it propagates.
+## Final quotation layout
+
+The final preview/PDF/Excel will show:
+1. Your Step 2 parameters (Raw Material, etc.) with their subcategories
+2. **Distance** (auto-injected from Step 1, charged per MT × tonnage)
+3. **Paint** (auto-injected from Step 1, charged per MT × tonnage, only if you picked one)
+4. **Erection** (auto-injected from Step 1, two lines: Safety + Height Surcharge, both per MT × tonnage)
+5. Subtotal → Margin → GST → Grand Total
