@@ -1,0 +1,535 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>METFRAA Costing Engine</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.0/jspdf.plugin.autotable.min.js"></script>
+
+<style>
+:root { --brand: #002b5f; --secondary: #0066B3; --bg: #F8F9FA; --border: #E9ECEF; }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'Segoe UI', sans-serif; background: var(--bg); color: #333; }
+.header { background: var(--brand); color: white; border-bottom: 4px solid var(--secondary); padding: 12px 24px; display: flex; justify-content: space-between; align-items: center; }
+.header-actions { display: flex; gap: 10px; align-items: center; }
+.header-btn { background: rgba(255,255,255,0.15); color: white; border: 1px solid rgba(255,255,255,0.3); padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: 600; }
+.header-btn:hover { background: rgba(255,255,255,0.25); }
+.header-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.logo { height: 40px; background: white; padding: 4px; border-radius: 4px; }
+.wizard { display: flex; background: white; padding: 15px; justify-content: center; gap: 30px; border-bottom: 1px solid var(--border); }
+.step { font-size: 13px; font-weight: 600; color: #adb5bd; text-transform: uppercase; cursor: pointer; }
+.step.active { color: var(--secondary); border-bottom: 2px solid var(--secondary); }
+.main { max-width: 1200px; margin: 25px auto; padding: 0 20px; }
+.page { display: none; }
+.page.active { display: block; }
+.card { background: white; border: 1px solid var(--border); border-radius: 6px; padding: 24px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+.section-title { font-size: 14px; font-weight: 700; text-transform: uppercase; color: var(--brand); border-bottom: 2px solid var(--border); padding-bottom: 8px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; }
+.form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 20px; }
+.field { display: flex; flex-direction: column; gap: 6px; }
+.label { font-size: 11px; font-weight: 700; text-transform: uppercase; color: #666; }
+.input { padding: 10px; border: 1px solid #ced4da; border-radius: 4px; font-size: 14px; }
+.builder { display: flex; gap: 20px; }
+.sidebar { width: 250px; background: white; border-radius: 6px; border: 1px solid var(--border); height: fit-content; }
+.item { padding: 12px; border-bottom: 1px solid var(--border); cursor: pointer; font-size: 13px; font-weight: 600; }
+.item.active { background: var(--brand); color: white; }
+.table { width: 100%; border-collapse: collapse; font-size: 13px; border: 1px solid #ddd; }
+.table th { background: var(--brand); color: white; padding: 10px; text-align: left; }
+.table td { border: 1px solid #ddd; padding: 8px; }
+.row-cat { background: #eee; font-weight: bold; color: var(--brand); }
+.row-total { background: #fafafa; font-weight: bold; }
+.cell-num { text-align: right; font-family: monospace; }
+.btn-row { display: flex; justify-content: space-between; margin-top: 20px; }
+.btn { padding: 12px 24px; border: none; border-radius: 4px; font-weight: 600; cursor: pointer; text-transform: uppercase; font-size: 12px; }
+.btn-p { background: var(--secondary); color: white; }
+.btn-s { background: #e9ecef; color: #495057; }
+.btn-warn { background: #f0ad4e; color: white; }
+.export-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; }
+.export-card { border: 1px solid var(--border); padding: 30px; text-align: center; cursor: pointer; border-radius: 6px; background: white; transition: 0.2s; }
+.export-card:hover { border-color: var(--secondary); background: #f0f7ff; }
+#status { background: #fff3cd; color: #856404; padding: 8px; text-align: center; font-weight: bold; font-size: 12px; }
+.toast { position: fixed; top: 20px; right: 20px; padding: 12px 20px; border-radius: 6px; color: white; font-weight: 600; font-size: 13px; z-index: 9999; box-shadow: 0 4px 12px rgba(0,0,0,0.15); display: none; }
+.toast.ok { background: #28a745; }
+.toast.err { background: #dc3545; }
+.toast.info { background: var(--secondary); }
+.rate-row { display: grid; grid-template-columns: 1fr 1fr 140px; gap: 10px; align-items: center; padding: 6px 0; border-bottom: 1px solid #f0f0f0; font-size: 13px; }
+.rate-row.head { font-weight: 700; color: #666; font-size: 11px; text-transform: uppercase; border-bottom: 2px solid var(--border); }
+.rate-input { padding: 6px 10px; border: 1px solid #ced4da; border-radius: 4px; font-family: monospace; text-align: right; }
+.rate-input.dirty { background: #fff3cd; border-color: #f0ad4e; }
+.cat-group { background: white; border: 1px solid var(--border); border-radius: 6px; padding: 16px; margin-bottom: 12px; }
+.cat-group summary { cursor: pointer; font-weight: 700; color: var(--brand); padding: 4px 0; }
+.band-info { font-size: 11px; color: #888; font-style: italic; margin-top: 4px; white-space: pre-line; }
+.modal-bg { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.5); z-index:9000; align-items:center; justify-content:center; }
+.modal-bg.show { display:flex; }
+.modal { background:white; padding:24px; border-radius:8px; min-width:320px; max-width:90vw; }
+.modal h3 { color:var(--brand); margin-bottom:16px; }
+</style>
+</head>
+<body>
+
+<header class="header">
+  <div style="font-size: 18px; font-weight: bold;">METFRAA COSTING ENGINE</div>
+  <div class="header-actions">
+    <button class="header-btn" onclick="refreshDB()" id="refreshBtn" title="Reload master data from OneDrive">⟳ Refresh</button>
+    <button class="header-btn" onclick="navSettings()" id="settingsBtn">⚙ Settings</button>
+    <img class="logo" src="Metfraa.png" alt="METFRAA" onerror="this.style.display='none'">
+  </div>
+</header>
+<div id="status">⏳ Syncing Database...</div>
+<div id="toast" class="toast"></div>
+
+<!-- Admin password modal -->
+<div id="pwModal" class="modal-bg">
+  <div class="modal">
+    <h3>Admin Access Required</h3>
+    <p style="font-size:13px; color:#666; margin-bottom:14px;">Enter the admin password to edit master rates.</p>
+    <input type="password" id="pwInput" class="input" style="width:100%; margin-bottom:14px;" placeholder="Password" onkeydown="if(event.key==='Enter') submitPw()">
+    <div style="display:flex; gap:10px; justify-content:flex-end;">
+      <button class="btn btn-s" onclick="closePw()">Cancel</button>
+      <button class="btn btn-p" onclick="submitPw()">Unlock</button>
+    </div>
+  </div>
+</div>
+
+<div class="wizard" id="wiz">
+    <div id="s1" class="step active" onclick="nav(1)">1. Project Info</div>
+    <div id="s2" class="step" onclick="nav(2)">2. Build Cost</div>
+    <div id="s3" class="step" onclick="nav(3)">3. Preview</div>
+    <div id="s4" class="step" onclick="nav(4)">4. Finalize</div>
+</div>
+
+<main class="main">
+  <div id="p1" class="page active">
+    <div class="card">
+      <div class="section-title">Identification</div>
+      <div class="form-grid">
+        <div class="field"><label class="label">Reference ID</label><input type="text" id="ref" class="input" placeholder="Met/est/2026/01"></div>
+        <div class="field"><label class="label">Date</label><input type="date" id="date" class="input"></div>
+        <div class="field"><label class="label">Project Name</label><input type="text" id="name" class="input"></div>
+        <div class="field"><label class="label">Client Name</label><input type="text" id="client" class="input"></div>
+      </div>
+      <div class="section-title" style="margin-top:24px;">Site & Tech Info</div>
+      <div class="form-grid">
+        <div class="field"><label class="label">Location</label><input type="text" id="loc" class="input"></div>
+        <div class="field"><label class="label">Distance (km)</label><input type="number" id="dist" class="input" value="0" oninput="updateBands()"></div>
+        <div class="field"><label class="label">Height (m)</label><input type="number" id="h" class="input" value="8" oninput="updateBands()"></div>
+        <div class="field"><label class="label">Area (sqm)</label><input type="number" id="area" class="input" value="0"></div>
+        <div class="field"><label class="label">Steel Tonnage (MT)</label><input type="number" id="ton" class="input" value="100"></div>
+        <div class="field"><label class="label">Margin %</label><input type="number" id="margin" class="input" value="12"></div>
+        <div class="field"><label class="label">GST %</label><input type="number" id="gst" class="input" value="18"></div>
+      </div>
+      <div id="bandInfo" class="band-info" style="margin-top:10px;"></div>
+    </div>
+    <div class="btn-row"><span></span><button class="btn btn-p" onclick="nav(2)" id="nb" disabled>Next ➔</button></div>
+  </div>
+
+  <div id="p2" class="page">
+    <div class="builder">
+      <div class="sidebar" id="sb"></div>
+      <div class="card" style="flex:1">
+        <h3 id="at" style="color:var(--brand); margin-bottom:15px;">Category</h3>
+        <table class="table">
+          <thead><tr><th>Description</th><th>Option</th><th width="100">Rate</th><th width="80">Qty</th><th width="110">Total</th></tr></thead>
+          <tbody id="bb"></tbody>
+          <tfoot><tr class="row-total"><td colspan="4" style="text-align:right">CATEGORY TOTAL</td><td id="ptd" class="cell-num">₹ 0</td></tr></tfoot>
+        </table>
+        <div id="catHint" class="band-info"></div>
+      </div>
+    </div>
+    <div class="btn-row"><button class="btn btn-s" onclick="nav(1)">Back</button><button class="btn btn-p" onclick="genPre(); nav(3)">Preview ➔</button></div>
+  </div>
+
+  <div id="p3" class="page">
+    <div class="card"><div class="section-title">Final Quotation</div><div id="pa"></div></div>
+    <div class="btn-row"><button class="btn btn-s" onclick="nav(2)">Edit</button><button class="btn btn-p" onclick="nav(4)">Finalize ➔</button></div>
+  </div>
+
+  <div id="p4" class="page">
+    <div class="card">
+      <div class="section-title">Save & Export</div>
+      <div class="export-grid">
+        <div class="export-card" onclick="dlExcel()">📊<h3>Excel</h3></div>
+        <div class="export-card" onclick="dlPDF()">📄<h3>PDF</h3></div>
+        <div class="export-card" id="sbnt" onclick="saveOD()">☁️<h3>OneDrive</h3></div>
+      </div>
+    </div>
+    <div class="btn-row"><button class="btn btn-s" onclick="location.reload()">New Project</button></div>
+  </div>
+
+  <div id="pSettings" class="page">
+    <div class="card">
+      <div class="section-title">
+        <span>Master Rate Editor</span>
+        <button class="btn btn-warn" onclick="saveMasterRates()" id="saveRatesBtn" style="padding:8px 16px;">💾 Save Changes to OneDrive</button>
+      </div>
+      <p style="font-size:12px; color:#666; margin-bottom:15px;">Edit rates below. Changed cells turn yellow. Click Save to push back to the master Excel sheet. The app will reload data automatically.</p>
+      <div id="ratesContainer"></div>
+    </div>
+    <div class="btn-row"><button class="btn btn-s" onclick="nav(1)">← Back to Costing</button></div>
+  </div>
+</main>
+
+<script>
+// Same-origin API — backend serves this HTML, so '' resolves to the host root
+const API_BASE = '';
+let DB = {}, state = { d: {}, s: {} }, curP = null;
+let dirtyRates = {};
+let adminProtected = false;
+let adminPassword = ''; // held in memory only
+
+// ================== TOAST ==================
+function toast(msg, type='info', ms=3000) {
+  const t = document.getElementById('toast');
+  t.className = 'toast ' + type;
+  t.innerText = msg;
+  t.style.display = 'block';
+  clearTimeout(window._toastT);
+  window._toastT = setTimeout(() => t.style.display = 'none', ms);
+}
+
+// ================== AUTH ==================
+async function checkAuthMode() {
+  try {
+    const r = await fetch(`${API_BASE}/api/auth-mode`);
+    const d = await r.json();
+    adminProtected = !!d.adminProtected;
+  } catch(e) { adminProtected = false; }
+}
+
+function showPwModal() { document.getElementById('pwModal').classList.add('show'); document.getElementById('pwInput').focus(); }
+function closePw() { document.getElementById('pwModal').classList.remove('show'); document.getElementById('pwInput').value = ''; }
+
+async function submitPw() {
+  const pw = document.getElementById('pwInput').value;
+  try {
+    const r = await fetch(`${API_BASE}/api/admin-check`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: pw })
+    });
+    const d = await r.json();
+    if (d.ok) {
+      adminPassword = pw;
+      closePw();
+      _navSettingsInner();
+    } else {
+      toast('❌ Wrong password', 'err');
+    }
+  } catch(e) { toast('Auth check failed', 'err'); }
+}
+
+// ================== DB LOAD / REFRESH ==================
+async function loadDB(showToast=false) {
+  const btn = document.getElementById('refreshBtn');
+  btn.disabled = true;
+  btn.innerText = '⟳ Loading...';
+  try {
+    const res = await fetch(`${API_BASE}/api/master-data?_=${Date.now()}`);
+    DB = await res.json();
+    document.getElementById('nb').disabled = false;
+    document.getElementById('status').style.display = 'none';
+    initSb();
+    if (curP && DB[curP]) {
+      const activeItem = document.querySelector('.item.active');
+      if (activeItem) loadWs(curP, activeItem);
+    }
+    if (document.getElementById('pSettings').classList.contains('active')) renderRatesEditor();
+    updateBands();
+    if (showToast) toast('✅ Master data refreshed', 'ok');
+  } catch(e) {
+    document.getElementById('status').innerText = '❌ Connection Failed';
+    document.getElementById('status').style.display = 'block';
+    if (showToast) toast('❌ Refresh failed: ' + e.message, 'err');
+  }
+  btn.disabled = false;
+  btn.innerText = '⟳ Refresh';
+}
+
+function refreshDB() { loadDB(true); }
+
+window.onload = async () => {
+  document.getElementById('date').valueAsDate = new Date();
+  await checkAuthMode();
+  loadDB(false);
+};
+
+// ================== NAVIGATION ==================
+function nav(n) {
+  if(n === 2) {
+    state.d = {
+      ref: document.getElementById('ref').value,
+      name: document.getElementById('name').value || 'Project',
+      client: document.getElementById('client').value || '',
+      margin: parseFloat(document.getElementById('margin').value) || 0,
+      gst: parseFloat(document.getElementById('gst').value) || 0,
+      dist: parseFloat(document.getElementById('dist').value) || 0,
+      height: parseFloat(document.getElementById('h').value) || 0
+    };
+    autoApplyBands();
+  }
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.step').forEach(s => s.classList.remove('active'));
+  document.getElementById('p'+n).classList.add('active');
+  const stp = document.getElementById('s'+n);
+  if (stp) stp.classList.add('active');
+  document.getElementById('wiz').style.display = 'flex';
+}
+
+function navSettings() {
+  if (adminProtected && !adminPassword) { showPwModal(); return; }
+  _navSettingsInner();
+}
+
+function _navSettingsInner() {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.step').forEach(s => s.classList.remove('active'));
+  document.getElementById('pSettings').classList.add('active');
+  document.getElementById('wiz').style.display = 'none';
+  renderRatesEditor();
+}
+
+// ================== BAND HELPERS ==================
+function findBandOption(options, value) {
+  if (!options) return null;
+  return options.find(o => {
+    const min = o.min !== undefined ? o.min : -Infinity;
+    const max = o.max !== undefined ? o.max : Infinity;
+    return value >= min && value <= max;
+  });
+}
+
+function updateBands() {
+  const km = parseFloat(document.getElementById('dist').value) || 0;
+  const h = parseFloat(document.getElementById('h').value) || 0;
+  const info = document.getElementById('bandInfo');
+  const lines = [];
+
+  const dOpts = DB['Distance'] && DB['Distance']['Distance'] ? DB['Distance']['Distance'] : null;
+  if (dOpts) {
+    const m = findBandOption(dOpts, km);
+    lines.push(m ? `Distance band: ${m.name} → ₹ ${m.rate.toLocaleString('en-IN')}` : `No distance band matches ${km} km — add one in Settings.`);
+  }
+  const hOpts = DB['Erection'] && DB['Erection']['Height'] ? DB['Erection']['Height'] : null;
+  if (hOpts) {
+    const m = findBandOption(hOpts, h);
+    lines.push(m ? `Height surcharge: ${m.name} → ₹ ${m.rate.toLocaleString('en-IN')}` : `No height band matches ${h} m.`);
+  }
+  info.innerText = lines.join('\n');
+}
+
+function autoApplyBands() {
+  const km = state.d.dist, h = state.d.height;
+  if (DB['Distance'] && DB['Distance']['Distance']) {
+    const m = findBandOption(DB['Distance']['Distance'], km);
+    if (m) {
+      if (!state.s['Distance']) state.s['Distance'] = {};
+      state.s['Distance']['Distance'] = { id: m.id, name: m.name, rate: m.rate, qty: 1, line: m.rate };
+    }
+  }
+  if (DB['Erection'] && DB['Erection']['Height']) {
+    const m = findBandOption(DB['Erection']['Height'], h);
+    if (m) {
+      if (!state.s['Erection']) state.s['Erection'] = {};
+      state.s['Erection']['Height'] = { id: m.id, name: m.name, rate: m.rate, qty: 1, line: m.rate };
+    }
+  }
+}
+
+// ================== STEP 2 BUILDER ==================
+function initSb() {
+  const s = document.getElementById('sb');
+  s.innerHTML = '';
+  Object.keys(DB).forEach(p => {
+    if(!state.s[p]) state.s[p] = {};
+    const d = document.createElement('div');
+    d.className = 'item'; d.innerText = p;
+    d.onclick = () => loadWs(p, d);
+    s.appendChild(d);
+  });
+  if(s.firstChild) loadWs(Object.keys(DB)[0], s.firstChild);
+}
+
+function loadWs(n, e) {
+  curP = n;
+  document.querySelectorAll('.item').forEach(i => i.classList.remove('active'));
+  e.classList.add('active');
+  document.getElementById('at').innerText = n;
+  const b = document.getElementById('bb'); b.innerHTML = '';
+  const hint = document.getElementById('catHint');
+  hint.innerText = '';
+
+  if (n === 'Distance') hint.innerText = `Auto-selected based on ${state.d.dist || 0} km from Step 1.`;
+  if (n === 'Erection') hint.innerText = `Height surcharge auto-selected based on ${state.d.height || 0} m. Pick a Safety type manually.`;
+
+  Object.entries(DB[n]).forEach(([sub, opts]) => {
+    const v = state.s[curP][sub] || { id: '', qty: '', rate: 0, line: 0, name: '' };
+    let oh = `<option value="">-- Select --</option>`;
+    opts.forEach(o => {
+      const r = o.rate || o.Rate || o['Rate (₹)'] || 0;
+      oh += `<option value="${o.id}" data-name="${o.name}" data-rate="${r}" ${v.id == o.id ? 'selected' : ''}>${o.name}</option>`;
+    });
+    const r = document.createElement('tr');
+    r.innerHTML = `<td>${sub}</td><td><select class="input o-s" style="padding:5px" data-sub="${sub}">${oh}</select></td><td class="cell-num r-v">₹ ${(v.rate||0).toLocaleString('en-IN')}</td><td><input type="number" class="input q-v" style="padding:5px" data-sub="${sub}" value="${v.qty}"></td><td class="cell-num l-v">₹ ${(v.line||0).toLocaleString('en-IN')}</td>`;
+    b.appendChild(r);
+  });
+  document.querySelectorAll('.o-s, .q-v').forEach(i => i.oninput = sync);
+  upTot();
+}
+
+function sync() {
+  let tot = 0;
+  document.querySelectorAll('#bb tr').forEach(r => {
+    const s = r.querySelector('.o-s'), qe = r.querySelector('.q-v'), sub = s.dataset.sub;
+    const q = parseFloat(qe.value) || 0, o = s.options[s.selectedIndex];
+    const rt = s.value ? parseFloat(o.dataset.rate) : 0, l = rt * q;
+    r.querySelector('.r-v').innerText = "₹ " + rt.toLocaleString('en-IN');
+    r.querySelector('.l-v').innerText = "₹ " + l.toLocaleString('en-IN');
+    if(s.value && q > 0) state.s[curP][sub] = { id: s.value, name: o.dataset.name, rate: rt, qty: q, line: l };
+    else delete state.s[curP][sub];
+    tot += l;
+  });
+  document.getElementById('ptd').innerText = "₹ " + tot.toLocaleString('en-IN');
+}
+
+function upTot() {
+  let t = 0;
+  Object.values(state.s[curP] || {}).forEach(v => t += (v.line || 0));
+  document.getElementById('ptd').innerText = "₹ " + t.toLocaleString('en-IN');
+}
+
+// ================== PREVIEW ==================
+function genPre() {
+  let gb = 0;
+  let h = `<table class="table" id="preTable"><thead><tr><th>SL</th><th>Description</th><th class="cell-num">Rate</th><th class="cell-num">Qty</th><th class="cell-num">Total</th></tr></thead><tbody>`;
+  let sl = 1;
+  Object.entries(state.s).forEach(([pn, subs]) => {
+    const e = Object.entries(subs);
+    if(e.length === 0) return;
+    let pt = 0;
+    h += `<tr class="row-cat"><td>${sl}</td><td colspan="4">${pn}</td></tr>`;
+    e.forEach(([sn, d]) => {
+      pt += d.line;
+      h += `<tr><td></td><td>${sn} (${d.name})</td><td class="cell-num">${d.rate.toLocaleString('en-IN')}</td><td class="cell-num">${d.qty}</td><td class="cell-num">${d.line.toLocaleString('en-IN')}</td></tr>`;
+    });
+    h += `<tr class="row-total"><td colspan="4" style="text-align:right">Subtotal ${pn}</td><td class="cell-num">₹ ${pt.toLocaleString('en-IN')}</td></tr>`;
+    gb += pt; sl++;
+  });
+  const m = gb * (state.d.margin / 100), g = (gb + m) * (state.d.gst / 100), f = gb + m + g;
+  h += `<tr class="row-total"><td colspan="4" style="text-align:right">BASE SUBTOTAL</td><td class="cell-num">₹ ${gb.toLocaleString('en-IN')}</td></tr>
+    <tr><td colspan="4" style="text-align:right">Margin (${state.d.margin}%)</td><td class="cell-num">₹ ${m.toLocaleString('en-IN')}</td></tr>
+    <tr><td colspan="4" style="text-align:right">GST (${state.d.gst}%)</td><td class="cell-num">₹ ${g.toLocaleString('en-IN')}</td></tr>
+    <tr style="background:var(--brand); color:white; font-weight:bold;"><td colspan="4" style="text-align:right">GRAND TOTAL</td><td class="cell-num">₹ ${f.toLocaleString('en-IN')}</td></tr></tbody></table>`;
+  document.getElementById('pa').innerHTML = h;
+}
+
+// ================== EXPORTS ==================
+function dlExcel() {
+  if (!document.getElementById('preTable')) { toast('Generate preview first', 'err'); return; }
+  const wb = XLSX.utils.table_to_book(document.getElementById("preTable"));
+  XLSX.writeFile(wb, `${state.d.ref || 'Quotation'}.xlsx`);
+}
+
+function dlPDF() {
+  if (!document.getElementById('preTable')) { toast('Generate preview first', 'err'); return; }
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF();
+  doc.setFontSize(16); doc.text("METFRAA STEEL BUILDINGS", 14, 15);
+  doc.setFontSize(10); doc.text(`Ref: ${state.d.ref} | Project: ${state.d.name}`, 14, 22);
+  doc.autoTable({ html: '#preTable', startY: 28, theme: 'grid', headStyles: {fillColor: [0, 43, 95]} });
+  doc.save(`${state.d.ref || 'Quotation'}.pdf`);
+}
+
+async function saveOD() {
+  const b = document.getElementById('sbnt'); b.innerText = "⏳ Saving...";
+  const content = document.getElementById('pa').innerHTML;
+  const fn = (state.d.ref || 'Quotation').replace(/[/\\?%*:|"<>]/g, '-');
+  try {
+    const res = await fetch(`${API_BASE}/api/save-quotation`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fileName: fn, htmlContent: `<html><style>.table{width:100%; border-collapse:collapse;} .table td,th{border:1px solid #ddd; padding:8px;} .row-cat{background:#eee; font-weight:bold; color:#002b5f;} .row-total{background:#fafafa; font-weight:bold;}</style><body><h2>${state.d.name}</h2>${content}</body></html>` })
+    });
+    const data = await res.json();
+    if(data.success) toast('✅ Saved to OneDrive!', 'ok');
+    else throw new Error(data.error);
+  } catch(e) { toast('Save Error: ' + e.message, 'err'); }
+  b.innerText = "☁️ OneDrive";
+}
+
+// ================== SETTINGS / RATE EDITOR ==================
+function renderRatesEditor() {
+  dirtyRates = {};
+  const c = document.getElementById('ratesContainer');
+  c.innerHTML = '';
+  Object.entries(DB).forEach(([pname, subs]) => {
+    const det = document.createElement('details');
+    det.className = 'cat-group';
+    det.open = false;
+    let inner = `<summary>${pname}</summary><div style="margin-top:12px;">`;
+    inner += `<div class="rate-row head"><div>Subcategory</div><div>Option</div><div style="text-align:right">Rate (₹)</div></div>`;
+    Object.entries(subs).forEach(([sub, opts]) => {
+      opts.forEach(o => {
+        const r = o.rate || o.Rate || o['Rate (₹)'] || 0;
+        const range = (o.min !== undefined || o.max !== undefined) ? ` <span style="color:#888;font-size:11px;">[${o.min ?? '−∞'}–${o.max ?? '∞'}]</span>` : '';
+        inner += `<div class="rate-row">
+          <div>${sub}</div>
+          <div>${o.name}${range}</div>
+          <input type="number" class="rate-input" data-id="${o.id}" data-original="${r}" value="${r}" oninput="markDirty(this)">
+        </div>`;
+      });
+    });
+    inner += `</div>`;
+    det.innerHTML = inner;
+    c.appendChild(det);
+  });
+}
+
+function markDirty(input) {
+  const id = input.dataset.id;
+  const orig = parseFloat(input.dataset.original);
+  const cur = parseFloat(input.value);
+  if (cur !== orig && !isNaN(cur)) {
+    dirtyRates[id] = cur;
+    input.classList.add('dirty');
+  } else {
+    delete dirtyRates[id];
+    input.classList.remove('dirty');
+  }
+}
+
+async function saveMasterRates() {
+  const updates = Object.entries(dirtyRates).map(([id, rate]) => ({ id, rate }));
+  if (updates.length === 0) { toast('No changes to save', 'info'); return; }
+  if (!confirm(`Save ${updates.length} rate change(s) to OneDrive master sheet?`)) return;
+
+  const btn = document.getElementById('saveRatesBtn');
+  btn.disabled = true; btn.innerText = '⏳ Saving...';
+  try {
+    const headers = { 'Content-Type': 'application/json' };
+    if (adminPassword) headers['x-admin-password'] = adminPassword;
+    const res = await fetch(`${API_BASE}/api/update-master-data`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ updates })
+    });
+    const data = await res.json();
+    if (res.status === 401) {
+      toast('❌ Session expired — please re-enter password', 'err');
+      adminPassword = '';
+      showPwModal();
+    } else if (data.success) {
+      toast(`✅ Updated ${data.changed} rate(s). Reloading...`, 'ok');
+      await loadDB(false);
+      renderRatesEditor();
+    } else {
+      throw new Error(data.error || 'Unknown error');
+    }
+  } catch(e) {
+    toast('❌ Save failed: ' + e.message, 'err', 5000);
+  }
+  btn.disabled = false; btn.innerText = '💾 Save Changes to OneDrive';
+}
+</script>
+</body>
+</html>
