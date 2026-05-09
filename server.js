@@ -117,12 +117,18 @@ app.get('/api/master-data', async (req, res) => {
 
             const type = (row['Type'] || 'RATE').toString().toUpperCase().trim();
 
-            formattedData[paramName].subs[subcat].push({
+            const opt = {
                 id: row['Option ID'],
                 name: row['Option Name'],
                 rate: parseFloat(rate) || 0,
                 type: (type === 'PERCENT' || type === 'PERCENTAGE' || type === '%') ? 'PERCENT' : 'RATE'
-            });
+            };
+
+            // Optional Min/Max columns for banded options (e.g. Distance bands)
+            if (row['Min'] !== undefined && row['Min'] !== '') opt.min = Number(row['Min']);
+            if (row['Max'] !== undefined && row['Max'] !== '') opt.max = Number(row['Max']);
+
+            formattedData[paramName].subs[subcat].push(opt);
         });
 
         res.json(formattedData);
