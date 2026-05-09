@@ -1,21 +1,21 @@
 {
   "name": "metfraa-costing-engine",
-  "version": "1.0.0",
-  "description": "METFRAA PEB Costing Engine — internal B2B quotation builder backed by OneDrive master data",
+  "version": "2.0.0",
+  "description": "METFRAA PEB Costing Engine — Express backend serving the wizard frontend, OneDrive-backed",
   "main": "server.js",
+  "type": "commonjs",
   "scripts": {
-    "start": "node server.js",
-    "dev": "node server.js"
+    "start": "node server.js"
   },
   "engines": {
     "node": ">=18.0.0"
   },
   "dependencies": {
-    "@azure/identity": "^4.2.1",
+    "@azure/identity": "^4.13.1",
     "@microsoft/microsoft-graph-client": "^3.0.7",
     "cors": "^2.8.5",
-    "dotenv": "^16.4.5",
-    "express": "^4.19.2",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
     "isomorphic-fetch": "^3.0.0",
     "xlsx": "^0.18.5"
   },
