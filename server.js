@@ -89,6 +89,7 @@ async function writeWorkbookToOneDrive(workbook) {
     const outBuffer = xlsx.write(workbook, { type: 'buffer', bookType: 'xlsx' });
     await graphClient
         .api(`/users/${targetEmail}/drive/root${MASTER_FILE_PATH}/content`)
+        .header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
         .put(outBuffer);
 }
 
@@ -162,14 +163,22 @@ app.get('/api/master-data', async (req, res) => {
         let workbook = xlsx.read(buffer, { type: 'buffer' });
         let sheetName = pickDataSheet(workbook);
 
-        // Bootstrap defaults (Distance, Paint) if missing
+        // Bootstrap defaults (Distance, Paint) if missing.
+        // If write-back fails, we still serve the bootstrapped data from memory
+        // so the app stays usable, and just retry on the next refresh.
         const bootstrapped = await bootstrapMissingDefaults(workbook, sheetName);
         if (bootstrapped) {
-            await writeWorkbookToOneDrive(workbook);
-            // Re-download so subsequent reads see the persisted version
-            buffer = await downloadMasterBuffer();
-            workbook = xlsx.read(buffer, { type: 'buffer' });
-            sheetName = pickDataSheet(workbook);
+            try {
+                await writeWorkbookToOneDrive(workbook);
+                console.log('✅ Bootstrap rows persisted to OneDrive');
+                // Re-download so subsequent reads see the persisted version
+                buffer = await downloadMasterBuffer();
+                workbook = xlsx.read(buffer, { type: 'buffer' });
+                sheetName = pickDataSheet(workbook);
+            } catch (writeErr) {
+                console.error('⚠️  Bootstrap write-back failed (will retry next request):', writeErr.message);
+                // Continue with the in-memory bootstrapped workbook — app stays usable
+            }
         }
 
         const rawData = xlsx.utils.sheet_to_json(workbook.Sheets[sheetName]);
@@ -415,10 +424,7 @@ app.post('/api/update-master-data', async (req, res) => {
         const newSheet = xlsx.utils.json_to_sheet(rawData, { header: headerRow });
         workbook.Sheets[sheetName] = newSheet;
 
-        const outBuffer = xlsx.write(workbook, { type: 'buffer', bookType: 'xlsx' });
-        await graphClient
-            .api(`/users/${targetEmail}/drive/root${MASTER_FILE_PATH}/content`)
-            .put(outBuffer);
+        await writeWorkbookToOneDrive(workbook);
 
         res.json({ success: true, changed });
     } catch (error) {
