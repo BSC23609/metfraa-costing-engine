@@ -155,6 +155,40 @@ body { font-family: 'Segoe UI', Tahoma, sans-serif; background: var(--brand-grey
   </div>
 </div>
 
+<!-- Add Row modal (+ button in Step 2) -->
+<div id="addRowModal" class="modal-bg">
+  <div class="modal" style="min-width:380px;">
+    <h3>Add Row to <span id="addRowParamName">—</span></h3>
+    <p style="font-size:12px; color:#666; margin-bottom:14px;">Add a one-off line item to this parameter. You can keep it just for this project or save it permanently to the master sheet.</p>
+    <div class="form-field" style="margin-bottom:10px;">
+      <label class="form-label">Subcategory (e.g. "EXTRA WELDING")</label>
+      <input type="text" id="addRowSubcat" class="form-input" placeholder="Subcategory">
+    </div>
+    <div class="form-field" style="margin-bottom:10px;">
+      <label class="form-label">Option Name (description)</label>
+      <input type="text" id="addRowName" class="form-input" placeholder="e.g. Site fabrication patch">
+    </div>
+    <div style="display:grid; grid-template-columns:1fr 130px; gap:10px; margin-bottom:14px;">
+      <div class="form-field">
+        <label class="form-label">Rate</label>
+        <input type="number" id="addRowRate" class="form-input" step="0.01" placeholder="0">
+      </div>
+      <div class="form-field">
+        <label class="form-label">Type</label>
+        <select id="addRowType" class="form-select">
+          <option value="RATE">RATE (₹)</option>
+          <option value="PERCENT">PERCENT (%)</option>
+        </select>
+      </div>
+    </div>
+    <div style="display:flex; gap:10px; flex-wrap:wrap; justify-content:flex-end;">
+      <button class="btn btn-secondary" onclick="closeAddRowModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="submitAddRow(false)">Add to this project only</button>
+      <button class="btn btn-warn" onclick="submitAddRow(true)">💾 Save to master</button>
+    </div>
+  </div>
+</div>
+
 <div class="wizard-steps" id="wizardSteps">
     <div id="step1-ind" class="step-indicator active">1. Project Info</div>
     <div id="step2-ind" class="step-indicator">2. Build Cost</div>
@@ -217,6 +251,14 @@ body { font-family: 'Segoe UI', Tahoma, sans-serif; background: var(--brand-grey
       </div>
       <div style="font-size:11px; color:#6c757d; margin-top:8px;">
         ℹ All four are charged <strong>per MT × Steel Tonnage</strong> and apply to the whole project. Paint and Distance rates are editable from <strong>⚙ Settings</strong>.
+      </div>
+
+      <div class="section-title" style="margin-top:24px;">Per-Parameter Quantities</div>
+      <div style="font-size:12px; color:#6c757d; margin-bottom:12px;">
+        Enter the quantity for each parameter. Blank quantities = that parameter won't appear in the final quotation.
+      </div>
+      <div id="qtyTable" style="display:grid; grid-template-columns:1fr 140px 60px; gap:8px 14px; align-items:center; font-size:13px;">
+        <em style="color:#aaa; grid-column:1/-1;">— loading parameters from master sheet —</em>
       </div>
 
       <div class="section-title" style="margin-top:24px;">Financial Parameters</div>
@@ -299,7 +341,7 @@ body { font-family: 'Segoe UI', Tahoma, sans-serif; background: var(--brand-grey
 // Same-origin: backend serves this HTML, so '' resolves to host root
 const RENDER_URL = '';
 let MASTER_DB = {};
-let projectState = { details: {}, qtys: {}, selections: {} };
+let projectState = { details: {}, qtys: {}, selections: {}, siteSpecific: {} };
 let activeP = null;
 let dirtyRates = {};
 let adminProtected = false;
@@ -336,22 +378,56 @@ function findBandedOption(opts, value) {
   });
 }
 
-function getDistanceBand() {
+// Tolerant lookup: matches "Distance", "15. DISTANCE", "distance ", etc.
+// Returns [key, node] or [null, null].
+function findParamByName(needle) {
+  const target = String(needle).trim().toLowerCase();
+  for (const [key, node] of Object.entries(MASTER_DB)) {
+    if (!node) continue;
+    const k = key.trim().toLowerCase().replace(/^\d+\.\s*/, '');
+    if (k === target) return [key, node];
+    if (k.startsWith(target)) return [key, node];  // matches "distance" vs "distance sqm"/"distance rmt"
+  }
+  return [null, null];
+}
+
+// Find a Distance variant by unit (MT / sqm / rmt). Falls back to plain "Distance" if no unit-specific one exists.
+function findDistanceParamForUnit(unit) {
+  const u = String(unit || 'MT').toLowerCase();
+  for (const [key, node] of Object.entries(MASTER_DB)) {
+    if (!node) continue;
+    const k = key.trim().toLowerCase().replace(/^\d+\.\s*/, '');
+    const nodeUnit = String(node.__unit || '').toLowerCase();
+    // Looking for "distance X" where X = unit, OR "distance" with matching __unit
+    if ((k.startsWith('distance ') && k.includes(u)) || (k === 'distance' && nodeUnit === u)) {
+      return [key, node];
+    }
+  }
+  // Fallback: any "distance" param (will be MT bands)
+  if (u === 'mt') return findParamByName('distance');
+  return [null, null];
+}
+
+function getDistanceBandForUnit(unit) {
   const km = parseFloat(document.getElementById('projDist').value) || 0;
-  const node = MASTER_DB['Distance'];
+  const [, node] = findDistanceParamForUnit(unit);
   if (!node || !node.subs) return null;
-  // Distance has one subcategory; flatten all options across subs just in case
   const allOpts = Object.values(node.subs).flat();
   const matched = findBandedOption(allOpts, km);
   if (!matched) return null;
-  return { id: matched.id, name: matched.name, rate: matched.rate, km };
+  return { id: matched.id, name: matched.name, rate: matched.rate, km, unit };
+}
+
+function getDistanceBand() {
+  // Default Step 1 display = MT band (since most params are MT)
+  return getDistanceBandForUnit('MT');
 }
 
 function updateDistanceBandDisplay() {
   const band = getDistanceBand();
   const el = document.getElementById('distBandDisplay');
   if (!band) {
-    el.value = MASTER_DB['Distance']
+    el.value = findParamByName('distance')[1]
       ? 'No band matches this km — check Distance rows in master sheet'
       : 'Distance parameter not in master sheet';
     return;
@@ -364,14 +440,13 @@ function updateDistanceBandDisplay() {
 // =========================================================
 function populatePaintDropdown() {
   const sel = document.getElementById('paintSelect');
-  const node = MASTER_DB['Paint'];
-  const prevValue = sel.value; // preserve selection across refreshes
+  const [, node] = findParamByName('paint');
+  const prevValue = sel.value;
   sel.innerHTML = '';
   if (!node || !node.subs) {
     sel.innerHTML = '<option value="">— Paint not in master sheet —</option>';
     return;
   }
-  // Add a "none" option first so user can opt out
   sel.innerHTML = '<option value="">— None —</option>';
   Object.values(node.subs).flat().forEach(o => {
     const opt = document.createElement('option');
@@ -381,7 +456,6 @@ function populatePaintDropdown() {
     opt.textContent = `${o.name} (₹${(o.rate || 0).toLocaleString('en-IN')}/MT)`;
     sel.appendChild(opt);
   });
-  // Restore previous selection if it still exists
   if (prevValue && [...sel.options].some(o => o.value === prevValue)) {
     sel.value = prevValue;
   }
@@ -396,6 +470,51 @@ function getPaintSelection() {
     name: opt.dataset.name,
     rate: parseFloat(opt.dataset.rate) || 0
   };
+}
+
+// =========================================================
+// PER-PARAMETER QUANTITY TABLE (Step 1)
+// One editable qty per parameter. Blank by default.
+// Skip Distance/Paint variants (handled separately).
+// Skip virtual params.
+// =========================================================
+function isStep1ManagedParam(name) {
+  const stripped = String(name).trim().toLowerCase().replace(/^\d+\.\s*/, '');
+  return stripped.startsWith('distance') || stripped === 'paint';
+}
+
+function renderQtyTable() {
+  const c = document.getElementById('qtyTable');
+  if (!c) return;
+  c.innerHTML = '';
+  // Header row
+  c.insertAdjacentHTML('beforeend',
+    '<div style="font-weight:700; font-size:11px; text-transform:uppercase; color:#666;">Parameter</div>' +
+    '<div style="font-weight:700; font-size:11px; text-transform:uppercase; color:#666; text-align:right;">Quantity</div>' +
+    '<div style="font-weight:700; font-size:11px; text-transform:uppercase; color:#666;">Unit</div>'
+  );
+  let added = 0;
+  Object.entries(MASTER_DB).forEach(([pname, node]) => {
+    if (!node || node.__virtual) return;
+    if (isStep1ManagedParam(pname)) return;
+    const unit = node.__unit || 'MT';
+    const currentQty = projectState.qtys[pname] || '';
+    const id = 'qty_' + pname.replace(/[^a-z0-9]/gi, '_');
+    c.insertAdjacentHTML('beforeend', `
+      <div>${pname}</div>
+      <input type="number" class="form-input" id="${id}" step="0.01" value="${currentQty}" placeholder="0" data-param="${pname.replace(/"/g,'&quot;')}" oninput="onQtyTableInput(this)" style="text-align:right;">
+      <div style="color:#888; font-family:monospace;">${unit}</div>
+    `);
+    added++;
+  });
+  if (added === 0) {
+    c.innerHTML = '<em style="color:#aaa; grid-column:1/-1;">No parameters in master sheet yet.</em>';
+  }
+}
+
+function onQtyTableInput(input) {
+  const param = input.dataset.param;
+  projectState.qtys[param] = input.value;
 }
 
 // =========================================================
@@ -449,6 +568,92 @@ async function submitPw() {
 }
 
 // =========================================================
+// ADD ROW MODAL (+ button in Step 2)
+// =========================================================
+function showAddRowModal() {
+  if (!activeP) return;
+  document.getElementById('addRowParamName').innerText = activeP;
+  document.getElementById('addRowSubcat').value = '';
+  document.getElementById('addRowName').value = '';
+  document.getElementById('addRowRate').value = '';
+  document.getElementById('addRowType').value = 'RATE';
+  document.getElementById('addRowModal').classList.add('show');
+  setTimeout(() => document.getElementById('addRowSubcat').focus(), 50);
+}
+
+function closeAddRowModal() {
+  document.getElementById('addRowModal').classList.remove('show');
+}
+
+async function submitAddRow(saveToMaster) {
+  const subcat = document.getElementById('addRowSubcat').value.trim();
+  const name = document.getElementById('addRowName').value.trim();
+  const rate = parseFloat(document.getElementById('addRowRate').value);
+  const type = document.getElementById('addRowType').value;
+
+  if (!subcat) { toast('Subcategory required', 'err'); return; }
+  if (!name) { toast('Option name required', 'err'); return; }
+  if (!isFinite(rate)) { toast('Rate must be a number', 'err'); return; }
+
+  if (saveToMaster) {
+    // Permanent — write to Excel via server (password-protected)
+    if (adminProtected && !adminPassword) {
+      toast('Admin password required for permanent additions', 'err');
+      showPwModal();
+      return;
+    }
+    try {
+      const headers = { 'Content-Type': 'application/json' };
+      if (adminPassword) headers['x-admin-password'] = adminPassword;
+      const unit = MASTER_DB[activeP].__unit || 'MT';
+      const res = await fetch(`${RENDER_URL}/api/add-master-row`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          paramName: activeP, subcategory: subcat, optionName: name,
+          rate, type, unit
+        })
+      });
+      const data = await res.json();
+      if (res.status === 401) {
+        adminPassword = '';
+        toast('❌ Session expired — re-enter password', 'err');
+        showPwModal();
+        return;
+      }
+      if (!data.success) throw new Error(data.error || 'Failed');
+      toast(`✅ Saved to master sheet (${data.id})`, 'ok');
+      closeAddRowModal();
+      await loadDB(false);
+      // Re-render the workspace so the new master row shows up
+      const activeItem = document.querySelector('.param-item.active');
+      if (activeItem) loadWorkspace(activeP, activeItem);
+    } catch (e) {
+      toast('❌ Save failed: ' + e.message, 'err', 5000);
+    }
+  } else {
+    // One-off — store in projectState.siteSpecific (persisted only in saved JSON)
+    if (!projectState.siteSpecific) projectState.siteSpecific = {};
+    if (!projectState.siteSpecific[activeP]) projectState.siteSpecific[activeP] = [];
+    projectState.siteSpecific[activeP].push({ subcategory: subcat, name, rate, type });
+    toast(`✅ Added "${name}" to this project`, 'ok');
+    closeAddRowModal();
+    const activeItem = document.querySelector('.param-item.active');
+    if (activeItem) loadWorkspace(activeP, activeItem);
+  }
+}
+
+function removeSiteSpecific(paramName, idx) {
+  if (!projectState.siteSpecific || !projectState.siteSpecific[paramName]) return;
+  projectState.siteSpecific[paramName].splice(idx, 1);
+  if (projectState.siteSpecific[paramName].length === 0) {
+    delete projectState.siteSpecific[paramName];
+  }
+  const activeItem = document.querySelector('.param-item.active');
+  if (activeItem) loadWorkspace(paramName, activeItem);
+}
+
+// =========================================================
 // INIT — load DB on page load
 // =========================================================
 window.onload = async () => {
@@ -488,6 +693,7 @@ async function loadDB(showRefreshToast) {
     initSidebar();
     populatePaintDropdown();
     updateDistanceBandDisplay();
+    renderQtyTable();
     document.getElementById('nextBtn').disabled = false;
 
     // If currently in Settings, re-render the rate editor
@@ -573,6 +779,10 @@ async function loadQuotation() {
     projectState.details = d;
     projectState.qtys = saved.qtys || {};
     projectState.selections = saved.selections || {};
+    projectState.siteSpecific = saved.siteSpecific || {};
+
+    // Re-render the qty table so loaded quantities show up
+    renderQtyTable();
 
     initSidebar();
 
@@ -659,13 +869,13 @@ function fmtNum(n, dp=2) { return (n || 0).toLocaleString('en-IN', {maximumFract
 function initSidebar() {
   const sb = document.getElementById('sidebar');
   sb.innerHTML = '';
-  // These parameters are handled on Step 1, not in the Step 2 sidebar
-  const STEP1_MANAGED = new Set(['distance', 'paint']);
   Object.keys(MASTER_DB).forEach(p => {
     // Skip virtual parameters (Erection is computed app-side, not user-edited)
     if (MASTER_DB[p] && MASTER_DB[p].__virtual) return;
     // Skip parameters managed entirely on Step 1
-    if (STEP1_MANAGED.has(p.trim().toLowerCase())) return;
+    // (any param whose name, stripped of "N. " prefix, starts with "distance" or "paint")
+    const stripped = p.trim().toLowerCase().replace(/^\d+\.\s*/, '');
+    if (stripped.startsWith('distance') || stripped === 'paint') return;
     if (!projectState.selections[p]) projectState.selections[p] = {};
     if (projectState.qtys[p] === undefined) projectState.qtys[p] = '';
     const div = document.createElement('div');
@@ -702,16 +912,13 @@ function loadWorkspace(name, el) {
   document.querySelectorAll('.param-item').forEach(i => i.classList.remove('active'));
   el.classList.add('active');
   const unit = MASTER_DB[name].__unit || 'MT';
-  document.getElementById('activeTitle').innerText = name;
+
+  // Title with + button
+  const titleEl = document.getElementById('activeTitle');
+  titleEl.innerHTML = `${name} <button class="btn btn-primary" style="float:right; padding:6px 12px; font-size:11px;" onclick="showAddRowModal()">+ Add Row</button>`;
   document.getElementById('activeUnitInfo').innerText = `Unit: ${unit}`;
 
-  document.getElementById('paramHelp').innerHTML = `<strong>How it works:</strong> Each row = a subcategory. RATE rows add ₹ directly per unit. PERCENT rows (Wastages, Overlap) apply % to RAW MATERIAL / SHEET COST cost. The "Qty" applies to the whole parameter — it's the same for every row.`;
-
-  // ----- Auto-fill quantity for MT-unit parameters from Steel Tonnage -----
-  if (unit === 'MT' && !projectState.qtys[name]) {
-    const tonnage = projectState.details.tonnage || parseFloat(document.getElementById('projTonnage').value) || 0;
-    if (tonnage > 0) projectState.qtys[name] = String(tonnage);
-  }
+  document.getElementById('paramHelp').innerHTML = `<strong>How it works:</strong> Each row = a subcategory. RATE rows add ₹ directly per unit. PERCENT rows (Wastages, Overlap) apply % to RAW MATERIAL / SHEET COST cost. The "Qty" comes from Step 1 — edit there or override below. Use <strong>+ Add Row</strong> for site-specific extras.`;
 
   const body = document.getElementById('builderBody');
   body.innerHTML = '';
@@ -719,12 +926,13 @@ function loadWorkspace(name, el) {
   const qtyRow = document.createElement('tr');
   qtyRow.style.background = '#fff8e1';
   qtyRow.innerHTML = `
-    <td colspan="3" style="font-weight:bold; color:var(--brand-primary);">QUANTITY (applies to whole parameter)</td>
+    <td colspan="3" style="font-weight:bold; color:var(--brand-primary);">QUANTITY (from Step 1; edit here to override for this parameter)</td>
     <td><input type="number" class="form-input" id="paramQty" value="${projectState.qtys[name]||''}" step="0.01" placeholder="0"></td>
     <td class="cell-num">${unit}</td>
   `;
   body.appendChild(qtyRow);
 
+  // Master sheet rows
   Object.entries(MASTER_DB[name].subs).forEach(([sub, opts]) => {
     const saved = projectState.selections[activeP][sub] || { id: '', rate: 0, line: 0, name: '', type: 'RATE' };
     let optHtml = `<option value="">-- Select Option --</option>`;
@@ -745,7 +953,28 @@ function loadWorkspace(name, el) {
     body.appendChild(row);
   });
 
-  document.getElementById('paramQty').oninput = sync;
+  // Site-specific rows (project-only, not from Excel)
+  const ss = (projectState.siteSpecific && projectState.siteSpecific[name]) || [];
+  ss.forEach((entry, idx) => {
+    const row = document.createElement('tr');
+    row.style.background = '#e7f5ff';
+    row.dataset.ssidx = idx;
+    const rateLabel = entry.type === 'PERCENT' ? `${entry.rate}%` : `₹ ${entry.rate.toLocaleString('en-IN')}`;
+    row.innerHTML = `
+      <td>${entry.subcategory || entry.name} <span style="background:#fff3cd; color:#856404; padding:1px 5px; font-size:10px; border-radius:3px; margin-left:4px;">📌 site-specific</span></td>
+      <td style="font-style:italic; color:#555;">${entry.name}</td>
+      <td class="cell-num">${rateLabel}</td>
+      <td class="cell-num" style="font-style:italic; color:#888">—</td>
+      <td class="cell-num ss-line">—</td>
+      <td style="border:none; padding-left:8px;"><button onclick="removeSiteSpecific('${name.replace(/'/g, "\\'")}', ${idx})" style="border:none; background:none; color:#dc3545; cursor:pointer; font-size:16px;" title="Remove">×</button></td>
+    `;
+    body.appendChild(row);
+  });
+
+  document.getElementById('paramQty').oninput = (e) => {
+    projectState.qtys[activeP] = e.target.value;
+    sync();
+  };
   document.querySelectorAll('.o-sel').forEach(i => i.oninput = sync);
   sync();
 }
@@ -799,6 +1028,29 @@ function sync() {
     row.querySelector('.l-v').innerText = lineLabel;
   });
 
+  // Site-specific rows
+  const ss = (projectState.siteSpecific && projectState.siteSpecific[activeP]) || [];
+  const ssRowsEl = document.querySelectorAll('#builderBody tr[data-ssidx]');
+  ss.forEach((entry, idx) => {
+    let perUnit;
+    if (entry.type === 'PERCENT') {
+      perUnit = rawMaterialUnitCost * (entry.rate / 100);
+    } else {
+      perUnit = entry.rate;
+    }
+    const lineTotal = perUnit * qty;
+    unitRateTotal += perUnit;
+    const subKey = '__SS__' + idx + '__' + (entry.subcategory || entry.name);
+    projectState.selections[activeP][subKey] = {
+      id: 'SS-' + idx, name: entry.name, subcategory: entry.subcategory || entry.name,
+      rate: entry.rate, type: entry.type, perUnit, qty, line: lineTotal, isSiteSpecific: true
+    };
+    const rowEl = ssRowsEl[idx];
+    if (rowEl) {
+      rowEl.querySelector('.ss-line').innerText = fmtINR(lineTotal);
+    }
+  });
+
   document.getElementById('paramUnitRateDisplay').innerText = fmtINR(unitRateTotal);
   document.getElementById('paramTotalDisplay').innerText = fmtINR(unitRateTotal * qty);
 
@@ -811,64 +1063,78 @@ function sync() {
 // Inject project-wide auto-charges as virtual parameters.
 // Distance + Paint come from Excel (Step 1 dropdowns); Erection from JS.
 // All charged per MT × tonnage. None appear in the Step 2 sidebar.
+// Inject auto-charges (Transport, Erection, Paint) INTO each real parameter's
+// selections, so they appear inline with that parameter's other subcategories.
+// Transport applies to every parameter (banded by km × parameter's unit).
+// Erection + Paint apply only to MT-unit parameters.
 function injectVirtualParameters() {
   const d = projectState.details;
-  const tonnage = d.tonnage || 0;
 
-  // Always clear any prior virtual entries so toggling Step 1 dropdowns has effect
-  ['Distance', 'Paint', 'Erection'].forEach(p => {
-    delete projectState.selections[p];
-    delete projectState.qtys[p];
-    if (MASTER_DB[p] && MASTER_DB[p].__virtual) delete MASTER_DB[p];
-  });
-
-  if (tonnage <= 0) return; // No tonnage = no per-MT charges
-
-  // Helper: register a virtual parameter
-  function addVirtual(paramName, lines) {
-    MASTER_DB[paramName] = MASTER_DB[paramName] || {};
-    MASTER_DB[paramName].__unit = 'MT';
-    MASTER_DB[paramName].__virtual = true;
-    MASTER_DB[paramName].subs = MASTER_DB[paramName].subs || {};
-    projectState.qtys[paramName] = String(tonnage);
-    projectState.selections[paramName] = lines;
-  }
-
-  // Distance (only if a band matched)
-  if (d.distBandRate > 0) {
-    addVirtual('Distance', {
-      'Distance Band': {
-        id: d.distBandId, name: d.distBandName,
-        rate: d.distBandRate, type: 'RATE', perUnit: d.distBandRate,
-        qty: tonnage, line: d.distBandRate * tonnage, isAuto: true
+  // Clean up any prior auto entries from previous render
+  Object.entries(projectState.selections).forEach(([param, subs]) => {
+    Object.keys(subs).forEach(subKey => {
+      if (subs[subKey] && subs[subKey].isAuto) {
+        delete subs[subKey];
       }
     });
-  }
+  });
 
-  // Paint (only if user picked an option)
-  if (d.paintRate > 0 || (d.paintId && d.paintRate >= 0)) {
-    if (d.paintId) {
-      addVirtual('Paint', {
-        'Paint Type': {
-          id: d.paintId, name: d.paintName,
-          rate: d.paintRate, type: 'RATE', perUnit: d.paintRate,
-          qty: tonnage, line: d.paintRate * tonnage, isAuto: true
-        }
-      });
+  // Also clean up legacy virtual standalone params from earlier versions
+  ['Distance', 'Paint', 'Erection'].forEach(p => {
+    if (MASTER_DB[p] && MASTER_DB[p].__virtual) delete MASTER_DB[p];
+    delete projectState.selections[p];
+    delete projectState.qtys[p];
+  });
+
+  // For each REAL parameter in MASTER_DB (skip virtuals + Step 1-managed ones),
+  // figure out its unit and inject auto-rows.
+  Object.entries(MASTER_DB).forEach(([pName, node]) => {
+    if (!node || node.__virtual) return;
+    if (isStep1ManagedParam(pName)) return;
+    const unit = (node.__unit || 'MT').toLowerCase();
+    const qty = parseFloat(projectState.qtys[pName]) || 0;
+    if (qty <= 0) return; // No qty for this param = no auto-charges
+
+    if (!projectState.selections[pName]) projectState.selections[pName] = {};
+
+    // 1. Transport Outward — banded by km, rate per unit. Applies to every param.
+    const trBand = getDistanceBandForUnit(unit);
+    if (trBand && trBand.rate > 0) {
+      projectState.selections[pName]['__AUTO__TRANSPORT_OUTWARD'] = {
+        id: trBand.id, name: `${trBand.name} @ ₹${trBand.rate}/${unit}`,
+        subcategory: 'TRANSPORT OUTWARD',
+        rate: trBand.rate, type: 'RATE', perUnit: trBand.rate,
+        qty, line: trBand.rate * qty, isAuto: true
+      };
     }
-  }
 
-  // Erection (always — Safety has a non-zero rate, Height may be 0 for ≤10m)
-  addVirtual('Erection', {
-    'Safety': {
-      id: 'ER_SAFETY', name: d.erSafetyLabel,
-      rate: d.erSafetyRate, type: 'RATE', perUnit: d.erSafetyRate,
-      qty: tonnage, line: d.erSafetyRate * tonnage, isAuto: true
-    },
-    'Height Surcharge': {
-      id: 'ER_HEIGHT', name: d.erHeightLabel,
-      rate: d.erHeightRate, type: 'RATE', perUnit: d.erHeightRate,
-      qty: tonnage, line: d.erHeightRate * tonnage, isAuto: true
+    // 2 + 3. Erection + Paint apply only to MT-unit parameters
+    if (unit === 'mt') {
+      // Erection Safety
+      if (d.erSafetyRate > 0) {
+        projectState.selections[pName]['__AUTO__ERECTION_SAFETY'] = {
+          id: 'ER_SAFETY', name: d.erSafetyLabel,
+          subcategory: 'ERECTION (SAFETY)',
+          rate: d.erSafetyRate, type: 'RATE', perUnit: d.erSafetyRate,
+          qty, line: d.erSafetyRate * qty, isAuto: true
+        };
+      }
+      // Erection Height surcharge (can be 0 for ≤10m — still show)
+      projectState.selections[pName]['__AUTO__ERECTION_HEIGHT'] = {
+        id: 'ER_HEIGHT', name: d.erHeightLabel,
+        subcategory: 'ERECTION (HEIGHT SURCHARGE)',
+        rate: d.erHeightRate, type: 'RATE', perUnit: d.erHeightRate,
+        qty, line: d.erHeightRate * qty, isAuto: true
+      };
+      // Paint — only if selected
+      if (d.paintId && d.paintRate >= 0) {
+        projectState.selections[pName]['__AUTO__PAINT'] = {
+          id: d.paintId, name: d.paintName,
+          subcategory: 'PAINT (FINISH)',
+          rate: d.paintRate, type: 'RATE', perUnit: d.paintRate,
+          qty, line: d.paintRate * qty, isAuto: true
+        };
+      }
     }
   });
 }
@@ -925,9 +1191,15 @@ function generatePreview() {
       const rateDisp = data.type === 'PERCENT'
         ? `${data.rate.toFixed(2)}% → ${fmtINR(data.perUnit)}`
         : fmtINR(data.perUnit);
+      const displayLabel = data.subcategory || subName;
+      const tag = data.isAuto
+        ? ' <span class="tag-rate">AUTO</span>'
+        : data.isSiteSpecific
+          ? ' <span style="background:#fff3cd; color:#856404; padding:1px 5px; font-size:10px; border-radius:3px;">📌 site-specific</span>'
+          : '';
       html += `<tr>
         <td></td>
-        <td style="padding-left:20px">${subName}${data.isAuto?' <span class="tag-rate">AUTO</span>':''} <span style="color:#666;font-size:11px">(${data.name})</span></td>
+        <td style="padding-left:20px">${displayLabel}${tag} <span style="color:#666;font-size:11px">(${data.name})</span></td>
         <td class="cell-num">${rateDisp}</td>
         <td class="cell-num">—</td>
         <td class="cell-num">—</td>
@@ -1014,7 +1286,9 @@ function downloadExcel() {
     const lineTotal = unitRateTotal * qty;
     rows.push([sl, pName, '', '', '', '', '']);
     entries.forEach(([subName, data]) => {
-      rows.push(['', '  ' + subName, data.name,
+      const label = data.subcategory || subName;
+      const tagSuffix = data.isAuto ? ' [AUTO]' : data.isSiteSpecific ? ' [SITE]' : '';
+      rows.push(['', '  ' + label + tagSuffix, data.name,
         data.type === 'PERCENT' ? data.rate.toFixed(2)+'%' : Math.round(data.perUnit),
         '', '', '']);
     });
@@ -1120,9 +1394,11 @@ function buildPDF() {
 
     body.push([{ content: `${sl}. ${pName}`, colSpan: 6, styles: { fillColor:[233,236,239], textColor:[0,43,95], fontStyle:'bold' }}]);
     entries.forEach(([subName, data]) => {
+      const label = data.subcategory || subName;
+      const tagSuffix = data.isAuto ? ' [AUTO]' : data.isSiteSpecific ? ' [SITE]' : '';
       body.push([
         '',
-        `${subName}  (${data.name})`,
+        `${label}${tagSuffix}  (${data.name})`,
         data.type === 'PERCENT' ? `${data.rate.toFixed(2)}%` : fmtINR(data.perUnit).replace('₹ ',''),
         '', '', ''
       ]);
@@ -1214,11 +1490,12 @@ async function saveToOneDrive() {
     const pdfBase64 = doc.output('datauristring').split(',')[1];
 
     const jsonData = {
-      version: 2,
+      version: 3,
       savedAt: new Date().toISOString(),
       details: d,
       qtys: projectState.qtys,
-      selections: projectState.selections
+      selections: projectState.selections,
+      siteSpecific: projectState.siteSpecific || {}
     };
 
     const res = await fetch(`${RENDER_URL}/api/save-quotation`, {

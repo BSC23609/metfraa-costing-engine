@@ -99,15 +99,25 @@ async function bootstrapMissingDefaults(workbook, sheetName) {
     const rawData = xlsx.utils.sheet_to_json(sheet);
     const headerRow = (xlsx.utils.sheet_to_json(sheet, { header: 1 })[0] || []).map(String);
 
-    const existingParams = new Set(rawData.map(r => String(r['Parameter Name'] || '').trim().toLowerCase()));
-    let changed = false;
+    // Match numbered or unnumbered param names case-insensitively
+    // (e.g. "Distance", "15. DISTANCE", "16. PAINT" all count as the same conceptual param)
+    function hasParam(needle) {
+        const target = needle.trim().toLowerCase();
+        return rawData.some(r => {
+            const name = String(r['Parameter Name'] || '').trim().toLowerCase();
+            // Strip leading "N. " prefix to compare
+            const stripped = name.replace(/^\d+\.\s*/, '');
+            return stripped === target || name === target;
+        });
+    }
 
-    if (!existingParams.has('distance')) {
+    let changed = false;
+    if (!hasParam('distance')) {
         rawData.push(...BOOTSTRAP_DISTANCE);
         changed = true;
         console.log('🔧 Bootstrapping: added 8 Distance band rows');
     }
-    if (!existingParams.has('paint')) {
+    if (!hasParam('paint')) {
         rawData.push(...BOOTSTRAP_PAINT);
         changed = true;
         console.log('🔧 Bootstrapping: added 3 Paint type rows');
@@ -538,6 +548,71 @@ app.post('/api/delete-paint-type', async (req, res) => {
         res.json({ success: true, deletedId: id });
     } catch (error) {
         console.error('Delete Paint Type Error:', error.message);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// =============================================================
+// 8. ROUTE: Add a generic row to the master sheet
+// Body: { paramName, subcategory, optionName, rate, type ('RATE'|'PERCENT'), unit, adminPassword? }
+// Used by the Step 2 "+ Add row (save to master)" flow.
+// =============================================================
+app.post('/api/add-master-row', async (req, res) => {
+    try {
+        if (!isAdmin(req)) return res.status(401).json({ success: false, error: 'Unauthorised' });
+
+        let { paramName, subcategory, optionName, rate, type, unit } = req.body;
+        paramName = String(paramName || '').trim();
+        subcategory = String(subcategory || '').trim();
+        optionName = String(optionName || '').trim();
+        type = String(type || 'RATE').toUpperCase().trim();
+        unit = String(unit || 'MT').trim();
+        const numRate = Number(rate);
+
+        if (!paramName) return res.status(400).json({ success: false, error: 'Parameter name required' });
+        if (!subcategory) return res.status(400).json({ success: false, error: 'Subcategory required' });
+        if (!optionName) return res.status(400).json({ success: false, error: 'Option name required' });
+        if (!Number.isFinite(numRate)) return res.status(400).json({ success: false, error: 'Rate must be a number' });
+        if (type !== 'RATE' && type !== 'PERCENT') return res.status(400).json({ success: false, error: 'Type must be RATE or PERCENT' });
+
+        const buffer = await downloadMasterBuffer();
+        const workbook = xlsx.read(buffer, { type: 'buffer' });
+        const sheetName = pickDataSheet(workbook);
+        const sheet = workbook.Sheets[sheetName];
+        const rawData = xlsx.utils.sheet_to_json(sheet);
+
+        // Generate a unique Option ID. Use the param's first 4 chars + sub's first 2 chars + N
+        const cleanP = paramName.replace(/^\d+\.\s*/, '').replace(/[^A-Z0-9]/gi, '').toUpperCase().slice(0, 4) || 'CUST';
+        const cleanS = subcategory.replace(/[^A-Z0-9]/gi, '').toUpperCase().slice(0, 2) || 'XX';
+        const allIds = new Set(rawData.map(r => String(r['Option ID'] || '')));
+        let n = 1;
+        let newId;
+        do {
+            newId = `${cleanP}-${cleanS}-${String(n).padStart(2, '0')}`;
+            n++;
+        } while (allIds.has(newId) && n < 1000);
+
+        rawData.push({
+            'Parameter Name': paramName,
+            'Subcategory': subcategory,
+            'Option ID': newId,
+            'Option Name': optionName,
+            'Rate': numRate,
+            'Unit': unit,
+            'Type': type,
+            'Min': '',
+            'Max': ''
+        });
+
+        let header = (xlsx.utils.sheet_to_json(sheet, { header: 1 })[0] || []).map(String);
+        REQUIRED_COLUMNS.forEach(col => { if (!header.includes(col)) header.push(col); });
+        const newSheet = xlsx.utils.json_to_sheet(rawData, { header });
+        workbook.Sheets[sheetName] = newSheet;
+
+        await writeWorkbookToOneDrive(workbook);
+        res.json({ success: true, id: newId, paramName, subcategory, optionName, rate: numRate, type, unit });
+    } catch (error) {
+        console.error('Add Master Row Error:', error.message);
         res.status(500).json({ success: false, error: error.message });
     }
 });
