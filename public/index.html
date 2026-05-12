@@ -161,8 +161,11 @@ body { font-family: 'Segoe UI', Tahoma, sans-serif; background: var(--brand-grey
     <h3>Add Row to <span id="addRowParamName">—</span></h3>
     <p style="font-size:12px; color:#666; margin-bottom:14px;">Add a one-off line item to this parameter. You can keep it just for this project or save it permanently to the master sheet.</p>
     <div class="form-field" style="margin-bottom:10px;">
-      <label class="form-label">Subcategory (e.g. "EXTRA WELDING")</label>
-      <input type="text" id="addRowSubcat" class="form-input" placeholder="Subcategory">
+      <label class="form-label">Subcategory</label>
+      <select id="addRowSubcat" class="form-select" onchange="onSubcatDropdownChange()">
+        <option value="">— select or type below —</option>
+      </select>
+      <input type="text" id="addRowSubcatOther" class="form-input" placeholder="Type a new subcategory name" style="margin-top:6px; display:none;">
     </div>
     <div class="form-field" style="margin-bottom:10px;">
       <label class="form-label">Option Name (description)</label>
@@ -183,7 +186,7 @@ body { font-family: 'Segoe UI', Tahoma, sans-serif; background: var(--brand-grey
     </div>
     <div style="display:flex; gap:10px; flex-wrap:wrap; justify-content:flex-end;">
       <button class="btn btn-secondary" onclick="closeAddRowModal()">Cancel</button>
-      <button class="btn btn-primary" onclick="submitAddRow(false)">Add to this project only</button>
+      <button class="btn btn-primary" id="addRowProjectBtn" onclick="submitAddRow(false)">Add to this project only</button>
       <button class="btn btn-warn" onclick="submitAddRow(true)">💾 Save to master</button>
     </div>
   </div>
@@ -568,15 +571,77 @@ async function submitPw() {
 }
 
 // =========================================================
-// ADD ROW MODAL (+ button in Step 2)
+// ADD ROW MODAL (+ button in Step 2 AND Settings)
 // =========================================================
+// Tracks which param the current modal targets, plus mode
+let addRowContext = { paramName: null, fromSettings: false };
+
+function _populateSubcatDropdown(paramName) {
+  const sel = document.getElementById('addRowSubcat');
+  const other = document.getElementById('addRowSubcatOther');
+  sel.innerHTML = '<option value="">— select existing or "Other..." —</option>';
+  // Existing subcategories for this parameter
+  const node = MASTER_DB[paramName];
+  if (node && node.subs) {
+    Object.keys(node.subs).forEach(sub => {
+      const opt = document.createElement('option');
+      opt.value = sub;
+      opt.textContent = sub;
+      sel.appendChild(opt);
+    });
+  }
+  const otherOpt = document.createElement('option');
+  otherOpt.value = '__OTHER__';
+  otherOpt.textContent = 'Other (type new subcategory)';
+  sel.appendChild(otherOpt);
+  other.value = '';
+  other.style.display = 'none';
+}
+
+function onSubcatDropdownChange() {
+  const sel = document.getElementById('addRowSubcat');
+  const other = document.getElementById('addRowSubcatOther');
+  if (sel.value === '__OTHER__') {
+    other.style.display = 'block';
+    other.focus();
+  } else {
+    other.style.display = 'none';
+    other.value = '';
+  }
+}
+
+function _resolveSubcatValue() {
+  const sel = document.getElementById('addRowSubcat');
+  const other = document.getElementById('addRowSubcatOther');
+  if (sel.value === '__OTHER__') return other.value.trim();
+  return sel.value.trim();
+}
+
+// Step 2 entrypoint — uses currently-active parameter
 function showAddRowModal() {
   if (!activeP) return;
-  document.getElementById('addRowParamName').innerText = activeP;
-  document.getElementById('addRowSubcat').value = '';
+  addRowContext = { paramName: activeP, fromSettings: false };
+  _openAddRowModal();
+}
+
+// Settings entrypoint — explicit parameter passed in
+function showAddRowModalForParam(paramName) {
+  addRowContext = { paramName, fromSettings: true };
+  _openAddRowModal();
+}
+
+function _openAddRowModal() {
+  const p = addRowContext.paramName;
+  document.getElementById('addRowParamName').innerText = p;
+  _populateSubcatDropdown(p);
   document.getElementById('addRowName').value = '';
   document.getElementById('addRowRate').value = '';
   document.getElementById('addRowType').value = 'RATE';
+
+  // In Settings, only "Save to master" makes sense — hide the "Add to this project" button
+  const projectBtn = document.getElementById('addRowProjectBtn');
+  if (projectBtn) projectBtn.style.display = addRowContext.fromSettings ? 'none' : '';
+
   document.getElementById('addRowModal').classList.add('show');
   setTimeout(() => document.getElementById('addRowSubcat').focus(), 50);
 }
@@ -586,12 +651,15 @@ function closeAddRowModal() {
 }
 
 async function submitAddRow(saveToMaster) {
-  const subcat = document.getElementById('addRowSubcat').value.trim();
+  const targetParam = addRowContext.paramName;
+  if (!targetParam) { toast('No parameter selected', 'err'); return; }
+
+  const subcat = _resolveSubcatValue();
   const name = document.getElementById('addRowName').value.trim();
   const rate = parseFloat(document.getElementById('addRowRate').value);
   const type = document.getElementById('addRowType').value;
 
-  if (!subcat) { toast('Subcategory required', 'err'); return; }
+  if (!subcat) { toast('Subcategory required (pick one or type a new name)', 'err'); return; }
   if (!name) { toast('Option name required', 'err'); return; }
   if (!isFinite(rate)) { toast('Rate must be a number', 'err'); return; }
 
@@ -605,12 +673,12 @@ async function submitAddRow(saveToMaster) {
     try {
       const headers = { 'Content-Type': 'application/json' };
       if (adminPassword) headers['x-admin-password'] = adminPassword;
-      const unit = MASTER_DB[activeP].__unit || 'MT';
+      const unit = (MASTER_DB[targetParam] && MASTER_DB[targetParam].__unit) || 'MT';
       const res = await fetch(`${RENDER_URL}/api/add-master-row`, {
         method: 'POST',
         headers,
         body: JSON.stringify({
-          paramName: activeP, subcategory: subcat, optionName: name,
+          paramName: targetParam, subcategory: subcat, optionName: name,
           rate, type, unit
         })
       });
@@ -625,21 +693,31 @@ async function submitAddRow(saveToMaster) {
       toast(`✅ Saved to master sheet (${data.id})`, 'ok');
       closeAddRowModal();
       await loadDB(false);
-      // Re-render the workspace so the new master row shows up
-      const activeItem = document.querySelector('.param-item.active');
-      if (activeItem) loadWorkspace(activeP, activeItem);
+
+      if (addRowContext.fromSettings) {
+        // Re-render Settings rate editor
+        renderRatesEditor();
+      } else {
+        // Step 2 — re-render the workspace so the new master row shows up
+        const activeItem = document.querySelector('.param-item.active');
+        if (activeItem) loadWorkspace(targetParam, activeItem);
+      }
     } catch (e) {
       toast('❌ Save failed: ' + e.message, 'err', 5000);
     }
   } else {
-    // One-off — store in projectState.siteSpecific (persisted only in saved JSON)
+    // One-off — only valid from Step 2 (Settings hides this button)
+    if (addRowContext.fromSettings) {
+      toast('Site-specific add is only available from Step 2', 'err');
+      return;
+    }
     if (!projectState.siteSpecific) projectState.siteSpecific = {};
-    if (!projectState.siteSpecific[activeP]) projectState.siteSpecific[activeP] = [];
-    projectState.siteSpecific[activeP].push({ subcategory: subcat, name, rate, type });
+    if (!projectState.siteSpecific[targetParam]) projectState.siteSpecific[targetParam] = [];
+    projectState.siteSpecific[targetParam].push({ subcategory: subcat, name, rate, type });
     toast(`✅ Added "${name}" to this project`, 'ok');
     closeAddRowModal();
     const activeItem = document.querySelector('.param-item.active');
-    if (activeItem) loadWorkspace(activeP, activeItem);
+    if (activeItem) loadWorkspace(targetParam, activeItem);
   }
 }
 
@@ -1566,11 +1644,14 @@ function renderRatesEditor() {
         </div>`;
       });
     });
+    // Per-parameter action bar: always show "+ Add Row"; Paint also gets "+ Add Paint Type" (legacy quick-add)
+    const escapedName = pname.replace(/'/g, "\\'");
+    inner += `<div style="margin-top:12px; padding-top:12px; border-top:1px dashed #dee2e6; display:flex; gap:10px; flex-wrap:wrap;">
+      <button class="btn btn-primary" style="padding:8px 16px;" onclick="showAddRowModalForParam('${escapedName}')">+ Add Row</button>`;
     if (isPaint) {
-      inner += `<div style="margin-top:12px; padding-top:12px; border-top:1px dashed #dee2e6;">
-        <button class="btn btn-primary" style="padding:8px 16px;" onclick="showAddPaintModal()">+ Add Paint Type</button>
-      </div>`;
+      inner += `<button class="btn btn-secondary" style="padding:8px 16px;" onclick="showAddPaintModal()" title="Quick add: name + rate, fixed subcategory 'Paint Type'">+ Add Paint Type (Quick)</button>`;
     }
+    inner += `</div>`;
     inner += `</div>`;
     det.innerHTML = inner;
     c.appendChild(det);
