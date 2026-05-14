@@ -398,6 +398,12 @@ body { font-family: 'Segoe UI', Tahoma, sans-serif; background: var(--brand-grey
 const RENDER_URL = '';
 let MASTER_DB = {};
 let projectState = { details: {}, qtys: {}, selections: {}, siteSpecific: {} };
+
+// Strip the "N. " Excel ordering prefix so display labels stay clean.
+// e.g. "3. SAG & BRACING RODS" -> "SAG & BRACING RODS"
+function cleanParamLabel(pname) {
+  return String(pname || '').replace(/^\d+\.\s*/, '').trim();
+}
 let activeP = null;
 let dirtyRates = {};
 let adminProtected = false;
@@ -650,14 +656,16 @@ function renderQtyTable() {
     '<div style="font-weight:700; font-size:11px; text-transform:uppercase; color:#666;">Unit</div>'
   );
   let added = 0;
+  let serial = 0;
   Object.entries(MASTER_DB).forEach(([pname, node]) => {
     if (!node || node.__virtual) return;
     if (isStep1ManagedParam(pname)) return;
     const unit = node.__unit || 'MT';
     const currentQty = projectState.qtys[pname] || '';
     const id = 'qty_' + pname.replace(/[^a-z0-9]/gi, '_');
+    serial++;
     c.insertAdjacentHTML('beforeend', `
-      <div>${pname}</div>
+      <div>${serial}. ${cleanParamLabel(pname)}</div>
       <input type="number" class="form-input" id="${id}" step="0.01" value="${currentQty}" placeholder="0" data-param="${pname.replace(/"/g,'&quot;')}" oninput="onQtyTableInput(this)" style="text-align:right;">
       <div style="color:#888; font-family:monospace;">${unit}</div>
     `);
@@ -785,7 +793,7 @@ function showAddRowModalForParam(paramName) {
 
 function _openAddRowModal() {
   const p = addRowContext.paramName;
-  document.getElementById('addRowParamName').innerText = p;
+  document.getElementById('addRowParamName').innerText = cleanParamLabel(p);
   _populateSubcatDropdown(p);
   document.getElementById('addRowName').value = '';
   document.getElementById('addRowRate').value = '';
@@ -1109,7 +1117,7 @@ function _showQuotationPreview(saved, qmeta) {
   // Build the parameter summary table
   let paramTable = '';
   Object.entries(selections).forEach(([pname, subs]) => {
-    const cleanName = pname.replace(/^\d+\.\s*/, '');
+    const cleanName = cleanParamLabel(pname);
     const lines = Object.values(subs).filter(s => s && s.line);
     const paramTotal = lines.reduce((a, b) => a + (b.line || 0), 0);
     const qty = qtys[pname] || '—';
@@ -1225,19 +1233,19 @@ function fmtNum(n, dp=2) { return (n || 0).toLocaleString('en-IN', {maximumFract
 function initSidebar() {
   const sb = document.getElementById('sidebar');
   sb.innerHTML = '';
+  let serial = 0;
   Object.keys(MASTER_DB).forEach(p => {
-    // Skip virtual parameters (Erection is computed app-side, not user-edited)
+    // Skip virtual parameters (legacy)
     if (MASTER_DB[p] && MASTER_DB[p].__virtual) return;
-    // Skip parameters managed entirely on Step 1
-    // (any param whose name, stripped of "N. " prefix, starts with "distance" or "paint")
-    const stripped = p.trim().toLowerCase().replace(/^\d+\.\s*/, '');
-    if (stripped.startsWith('distance') || stripped === 'paint') return;
+    // Skip parameters managed entirely on Step 1 (Distance variants, Paint, Erection Safety/Height)
+    if (isStep1ManagedParam(p)) return;
     if (!projectState.selections[p]) projectState.selections[p] = {};
     if (projectState.qtys[p] === undefined) projectState.qtys[p] = '';
+    serial++;
     const div = document.createElement('div');
     div.className = 'param-item';
     div.dataset.param = p;
-    div.innerHTML = `${p}<span class="param-status"></span>`;
+    div.innerHTML = `${serial}. ${cleanParamLabel(p)}<span class="param-status"></span>`;
     div.onclick = () => loadWorkspace(p, div);
     sb.appendChild(div);
   });
@@ -1271,7 +1279,7 @@ function loadWorkspace(name, el) {
 
   // Title with + button
   const titleEl = document.getElementById('activeTitle');
-  titleEl.innerHTML = `${name} <button class="btn btn-primary" style="float:right; padding:6px 12px; font-size:11px;" onclick="showAddRowModal()">+ Add Row</button>`;
+  titleEl.innerHTML = `${cleanParamLabel(name)} <button class="btn btn-primary" style="float:right; padding:6px 12px; font-size:11px;" onclick="showAddRowModal()">+ Add Row</button>`;
   document.getElementById('activeUnitInfo').innerText = `Unit: ${unit}`;
 
   document.getElementById('paramHelp').innerHTML = `<strong>How it works:</strong> Each row = a subcategory. RATE rows add ₹ directly per unit. PERCENT rows (Wastages, Overlap) apply % to RAW MATERIAL / SHEET COST cost. The "Qty" comes from Step 1 — edit there or override below. Use <strong>+ Add Row</strong> for site-specific extras.`;
@@ -1548,7 +1556,7 @@ function generatePreview() {
     entries.forEach(([, data]) => unitRateTotal += data.perUnit);
     const lineTotal = unitRateTotal * qty;
 
-    html += `<tr class="row-category"><td>${sl}</td><td colspan="5">${pName.replace(/^\d+\.\s*/, '')}</td></tr>`;
+    html += `<tr class="row-category"><td>${sl}</td><td colspan="5">${cleanParamLabel(pName)}</td></tr>`;
     entries.forEach(([subName, data]) => {
       const rateDisp = data.type === 'PERCENT'
         ? `${data.rate.toFixed(2)}% → ${fmtINR(data.perUnit)}`
@@ -1570,7 +1578,7 @@ function generatePreview() {
     });
     html += `<tr class="row-total">
       <td></td>
-      <td style="text-align:right">SUBTOTAL — ${pName}</td>
+      <td style="text-align:right">SUBTOTAL — ${cleanParamLabel(pName)}</td>
       <td class="cell-num">${fmtINR(unitRateTotal)}</td>
       <td class="cell-num">${fmtNum(qty,2)}</td>
       <td class="cell-num">${unit}</td>
@@ -1646,7 +1654,7 @@ function downloadExcel() {
     let unitRateTotal = 0;
     entries.forEach(([, data]) => unitRateTotal += data.perUnit);
     const lineTotal = unitRateTotal * qty;
-    rows.push([sl, pName.replace(/^\d+\.\s*/, ''), '', '', '', '', '']);
+    rows.push([sl, cleanParamLabel(pName), '', '', '', '', '']);
     entries.forEach(([subName, data]) => {
       const label = data.subcategory || subName;
       const tagSuffix = data.isAuto ? ' [AUTO]' : data.isSiteSpecific ? ' [SITE]' : '';
@@ -1654,7 +1662,7 @@ function downloadExcel() {
         data.type === 'PERCENT' ? data.rate.toFixed(2)+'%' : Math.round(data.perUnit),
         '', '', '']);
     });
-    rows.push(['', `SUBTOTAL — ${pName}`, '', Math.round(unitRateTotal), qty, unit, Math.round(lineTotal)]);
+    rows.push(['', `SUBTOTAL — ${cleanParamLabel(pName)}`, '', Math.round(unitRateTotal), qty, unit, Math.round(lineTotal)]);
     grandBase += lineTotal;
     sl++;
   });
@@ -1755,7 +1763,7 @@ function buildPDF() {
   // (except the last). This forces each new parameter onto its own page if it doesn't fit.
   // Within a parameter, rows never break (rowPageBreak:'avoid').
 
-  const cleanParamName = (pname) => pname.replace(/^\d+\.\s*/, '').trim();
+  const cleanParamName = cleanParamLabel;
 
   // Sub-totals tracker
   const paramSummary = []; // { sl, name, total }
@@ -2020,7 +2028,7 @@ function renderRatesEditor() {
     const det = document.createElement('details');
     det.className = 'cat-group';
     det.open = isPaint; // open Paint by default since it has add/delete
-    let inner = `<summary>${pname} <span style="color:#888; font-weight:normal; font-size:12px;">(${node.__unit || ''})</span></summary><div style="margin-top:12px;">`;
+    let inner = `<summary>${cleanParamLabel(pname)} <span style="color:#888; font-weight:normal; font-size:12px;">(${node.__unit || ''})</span></summary><div style="margin-top:12px;">`;
     inner += `<div class="rate-row head"><div>Subcategory</div><div>Option</div><div style="text-align:center">Type</div><div style="text-align:right">Rate / %</div>${isPaint ? '<div style="text-align:center">Action</div>' : ''}</div>`;
     Object.entries(subs).forEach(([sub, opts]) => {
       opts.forEach(o => {
