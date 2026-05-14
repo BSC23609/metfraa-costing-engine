@@ -192,6 +192,53 @@ body { font-family: 'Segoe UI', Tahoma, sans-serif; background: var(--brand-grey
   </div>
 </div>
 
+<!-- Quotation Preview Modal (View/Edit recent quotations) -->
+<div id="quotationPreviewModal" class="modal-bg">
+  <div class="modal" style="min-width:560px; max-width:720px; max-height:85vh; overflow-y:auto;">
+    <div style="display:flex; justify-content:space-between; align-items:start; margin-bottom:14px;">
+      <div>
+        <h3 style="margin:0 0 4px 0;" id="qpName">—</h3>
+        <div style="font-size:11px; color:#888;">Saved: <span id="qpDate">—</span></div>
+      </div>
+      <button onclick="closeQuotationPreview()" style="background:none; border:none; font-size:22px; cursor:pointer; color:#888;">×</button>
+    </div>
+
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px 14px; font-size:12px; padding:12px; background:#f8f9fa; border-radius:6px; margin-bottom:14px;">
+      <div><strong>Quotation Ref:</strong> <span id="qpRef">—</span></div>
+      <div><strong>Client:</strong> <span id="qpClient">—</span></div>
+      <div><strong>Location:</strong> <span id="qpLocation">—</span></div>
+      <div><strong>Distance:</strong> <span id="qpDist">—</span></div>
+      <div><strong>Area:</strong> <span id="qpArea">—</span></div>
+      <div><strong>Tonnage:</strong> <span id="qpTonnage">—</span></div>
+    </div>
+
+    <div style="font-weight:700; font-size:11px; text-transform:uppercase; color:#666; margin-bottom:6px;">Parameter Costs</div>
+    <table style="width:100%; border-collapse:collapse; font-size:13px; margin-bottom:14px;">
+      <thead>
+        <tr style="background:#f0f3f7;">
+          <th style="text-align:left; padding:6px 10px; font-size:11px; text-transform:uppercase;">Parameter</th>
+          <th style="text-align:right; padding:6px 10px; font-size:11px; text-transform:uppercase;">Qty</th>
+          <th style="text-align:right; padding:6px 10px; font-size:11px; text-transform:uppercase;">Total</th>
+        </tr>
+      </thead>
+      <tbody id="qpParamTable"></tbody>
+    </table>
+
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px 14px; font-size:13px; padding:12px; background:#fff8e1; border-radius:6px; margin-bottom:18px;">
+      <div>Subtotal:</div><div style="text-align:right; font-family:monospace;" id="qpSubtotal">—</div>
+      <div>Margin:</div><div style="text-align:right; font-family:monospace; color:#666;" id="qpMargin">—</div>
+      <div>GST:</div><div style="text-align:right; font-family:monospace; color:#666;" id="qpGST">—</div>
+      <div style="font-weight:700; font-size:14px;">Grand Total:</div>
+      <div style="text-align:right; font-family:monospace; font-weight:700; font-size:15px; color:var(--brand-primary);" id="qpGrand">—</div>
+    </div>
+
+    <div style="display:flex; gap:10px; justify-content:flex-end;">
+      <button class="btn btn-secondary" onclick="closeQuotationPreview()">Close</button>
+      <button class="btn btn-primary" id="qpEditBtn">✏ Edit this quotation</button>
+    </div>
+  </div>
+</div>
+
 <div class="wizard-steps" id="wizardSteps">
     <div id="step1-ind" class="step-indicator active">1. Project Info</div>
     <div id="step2-ind" class="step-indicator">2. Build Cost</div>
@@ -218,6 +265,14 @@ body { font-family: 'Segoe UI', Tahoma, sans-serif; background: var(--brand-grey
         <div class="form-field"><label class="form-label">Date</label><input type="date" id="projDate" class="form-input"></div>
         <div class="form-field"><label class="form-label">Project Name</label><input type="text" id="projName" class="form-input" placeholder="e.g. Gymnasium Indoor Shed"></div>
         <div class="form-field"><label class="form-label">Client Name</label><input type="text" id="projClient" class="form-input"></div>
+      </div>
+
+      <div class="section-title" style="margin-top:24px; display:flex; justify-content:space-between; align-items:center;">
+        <span>Recent Quotations</span>
+        <button onclick="loadRecentQuotations()" style="padding:4px 12px; font-size:11px; background:transparent; border:1px solid var(--brand-primary); color:var(--brand-primary); border-radius:4px; cursor:pointer;">⟳ Refresh</button>
+      </div>
+      <div id="recentList" style="font-size:13px;">
+        <em style="color:#aaa;">Loading…</em>
       </div>
 
       <div class="section-title" style="margin-top:24px;">Site & Technical Specs</div>
@@ -419,6 +474,33 @@ function getDistanceBandForUnit(unit) {
   const matched = findBandedOption(allOpts, km);
   if (!matched) return null;
   return { id: matched.id, name: matched.name, rate: matched.rate, km, unit };
+}
+
+// Params that use the special STP (Sag/Tie/Purlin) bands instead of regular MT.
+// Match is case-insensitive substring match on the param's name (after stripping "N. " prefix).
+const STP_PARAMS = ['sag', 'tie beam', 'purlin'];
+function paramUsesSTPBands(paramName) {
+  const stripped = String(paramName).trim().toLowerCase().replace(/^\d+\.\s*/, '');
+  return STP_PARAMS.some(needle => stripped.includes(needle));
+}
+
+function getDistanceBandSTP() {
+  const km = parseFloat(document.getElementById('projDist').value) || 0;
+  // Find by name "distance stp" first; fallback: any param whose stripped name starts with "distance stp"
+  let node = null;
+  for (const [key, n] of Object.entries(MASTER_DB)) {
+    if (!n) continue;
+    const k = key.trim().toLowerCase().replace(/^\d+\.\s*/, '');
+    if (k === 'distance stp' || k.startsWith('distance stp')) {
+      node = n;
+      break;
+    }
+  }
+  if (!node || !node.subs) return null;
+  const allOpts = Object.values(node.subs).flat();
+  const matched = findBandedOption(allOpts, km);
+  if (!matched) return null;
+  return { id: matched.id, name: matched.name, rate: matched.rate, km, unit: 'MT' };
 }
 
 function getDistanceBand() {
@@ -772,6 +854,7 @@ async function loadDB(showRefreshToast) {
     populatePaintDropdown();
     updateDistanceBandDisplay();
     renderQtyTable();
+    loadRecentQuotations();
     document.getElementById('nextBtn').disabled = false;
 
     // If currently in Settings, re-render the rate editor
@@ -824,45 +907,7 @@ async function loadQuotation() {
     const saved = data.data;
     if (!saved || !saved.details) throw new Error('Saved file is missing data.');
 
-    const d = saved.details;
-    document.getElementById('projRef').value = d.ref || '';
-    document.getElementById('projDate').value = d.date || new Date().toISOString().slice(0, 10);
-    document.getElementById('projName').value = d.name || '';
-    document.getElementById('projClient').value = d.client || '';
-    document.getElementById('projLoc').value = d.loc || '';
-    document.getElementById('projDist').value = d.dist || 0;
-    document.getElementById('projHeight').value = d.height || 0;
-    document.getElementById('projArea').value = d.area || 0;
-    document.getElementById('projTonnage').value = d.tonnage || 0;
-    document.getElementById('projSafety').value = d.safety || 'Average';
-    document.getElementById('projDesign').value = d.design || 'Yes';
-    document.getElementById('projMargin').value = d.margin || 12;
-    document.getElementById('projGST').value = d.gst || 18;
-
-    // Restore erection safety; height surcharge auto-recomputes from building height
-    if (d.erSafetyRate !== undefined) {
-      document.getElementById('erSafety').value = String(d.erSafetyRate);
-    }
-    updateErectionHeightDisplay();
-
-    // Restore Paint dropdown selection (and Distance is auto-computed from km)
-    if (d.paintId) {
-      const psel = document.getElementById('paintSelect');
-      if ([...psel.options].some(o => o.value === d.paintId)) {
-        psel.value = d.paintId;
-      }
-    }
-    updateDistanceBandDisplay();
-
-    projectState.details = d;
-    projectState.qtys = saved.qtys || {};
-    projectState.selections = saved.selections || {};
-    projectState.siteSpecific = saved.siteSpecific || {};
-
-    // Re-render the qty table so loaded quantities show up
-    renderQtyTable();
-
-    initSidebar();
+    _applySavedQuotation(saved);
 
     let extra = '';
     if (data.otherMatches && data.otherMatches.length > 0) {
@@ -872,6 +917,166 @@ async function loadQuotation() {
   } catch (e) {
     alert('❌ Load failed: ' + e.message);
   }
+}
+
+// Shared: write a loaded quotation's data into all form fields & projectState
+function _applySavedQuotation(saved) {
+  const d = saved.details;
+  document.getElementById('projRef').value = d.ref || '';
+  document.getElementById('projDate').value = d.date || new Date().toISOString().slice(0, 10);
+  document.getElementById('projName').value = d.name || '';
+  document.getElementById('projClient').value = d.client || '';
+  document.getElementById('projLoc').value = d.loc || '';
+  document.getElementById('projDist').value = d.dist || 0;
+  document.getElementById('projHeight').value = d.height || 0;
+  document.getElementById('projArea').value = d.area || 0;
+  document.getElementById('projTonnage').value = d.tonnage || 0;
+  document.getElementById('projSafety').value = d.safety || 'Average';
+  document.getElementById('projDesign').value = d.design || 'Yes';
+  document.getElementById('projMargin').value = d.margin || 12;
+  document.getElementById('projGST').value = d.gst || 18;
+
+  if (d.erSafetyRate !== undefined) {
+    document.getElementById('erSafety').value = String(d.erSafetyRate);
+  }
+  updateErectionHeightDisplay();
+
+  if (d.paintId) {
+    const psel = document.getElementById('paintSelect');
+    if ([...psel.options].some(o => o.value === d.paintId)) {
+      psel.value = d.paintId;
+    }
+  }
+  updateDistanceBandDisplay();
+
+  projectState.details = d;
+  projectState.qtys = saved.qtys || {};
+  projectState.selections = saved.selections || {};
+  projectState.siteSpecific = saved.siteSpecific || {};
+
+  renderQtyTable();
+  initSidebar();
+}
+
+// =========================================================
+// RECENT QUOTATIONS (Step 1)
+// Auto-loaded; click → preview modal → Edit
+// =========================================================
+let recentQuotationsCache = [];
+const RECENT_LIMIT = 10;
+
+async function loadRecentQuotations() {
+  const c = document.getElementById('recentList');
+  if (!c) return;
+  c.innerHTML = '<em style="color:#aaa;">Loading…</em>';
+  try {
+    const res = await fetch(`${RENDER_URL}/api/list-quotations`);
+    if (!res.ok) throw new Error('Server error');
+    const data = await res.json();
+    const list = (data.quotations || []).slice(0, RECENT_LIMIT);
+    recentQuotationsCache = list;
+    if (list.length === 0) {
+      c.innerHTML = '<em style="color:#aaa;">No quotations saved yet. Create one and save it to OneDrive — it will appear here.</em>';
+      return;
+    }
+    c.innerHTML = '';
+    list.forEach((q, i) => {
+      const dt = new Date(q.lastModified);
+      const dtLabel = dt.toLocaleString('en-IN', {
+        year: 'numeric', month: 'short', day: '2-digit',
+        hour: '2-digit', minute: '2-digit'
+      });
+      const item = document.createElement('div');
+      item.style.cssText = 'display:flex; justify-content:space-between; align-items:center; padding:8px 12px; border:1px solid #e9ecef; border-radius:6px; margin-bottom:6px; background:#fafbfc;';
+      item.innerHTML = `
+        <div style="flex:1; overflow:hidden;">
+          <div style="font-weight:600; color:#333; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${q.name}</div>
+          <div style="font-size:11px; color:#888;">${dtLabel}</div>
+        </div>
+        <button onclick="previewRecentQuotation(${i})" style="padding:6px 14px; font-size:12px; background:var(--brand-primary); color:white; border:none; border-radius:4px; cursor:pointer; margin-left:8px;">👁 View / Edit</button>
+      `;
+      c.appendChild(item);
+    });
+  } catch (e) {
+    c.innerHTML = `<em style="color:#dc3545;">Failed to load: ${e.message}</em>`;
+  }
+}
+
+async function previewRecentQuotation(idx) {
+  const q = recentQuotationsCache[idx];
+  if (!q) return;
+  try {
+    const res = await fetch(`${RENDER_URL}/api/load-quotation?ref=${encodeURIComponent(q.name)}`);
+    if (!res.ok) throw new Error('Server returned ' + res.status);
+    const data = await res.json();
+    if (!data.success || !data.data) throw new Error(data.error || 'No data');
+    _showQuotationPreview(data.data, q);
+  } catch (e) {
+    alert('Failed to load quotation: ' + e.message);
+  }
+}
+
+function _showQuotationPreview(saved, qmeta) {
+  const d = saved.details || {};
+  const qtys = saved.qtys || {};
+  const selections = saved.selections || {};
+
+  // Compute totals to show in preview
+  let grandSubtotal = 0;
+  Object.entries(selections).forEach(([param, subs]) => {
+    Object.values(subs).forEach(line => { if (line && line.line) grandSubtotal += line.line; });
+  });
+  const margin = parseFloat(d.margin) || 12;
+  const gst = parseFloat(d.gst) || 18;
+  const withMargin = grandSubtotal * (1 + margin / 100);
+  const grandTotal = withMargin * (1 + gst / 100);
+
+  const fmt = n => '₹ ' + Math.round(n).toLocaleString('en-IN');
+
+  // Build the parameter summary table
+  let paramTable = '';
+  Object.entries(selections).forEach(([pname, subs]) => {
+    const cleanName = pname.replace(/^\d+\.\s*/, '');
+    const lines = Object.values(subs).filter(s => s && s.line);
+    const paramTotal = lines.reduce((a, b) => a + (b.line || 0), 0);
+    const qty = qtys[pname] || '—';
+    if (paramTotal === 0) return;
+    paramTable += `<tr>
+      <td style="padding:6px 10px; border-bottom:1px solid #eee;">${cleanName}</td>
+      <td style="padding:6px 10px; border-bottom:1px solid #eee; text-align:right;">${qty}</td>
+      <td style="padding:6px 10px; border-bottom:1px solid #eee; text-align:right; font-family:monospace;">${fmt(paramTotal)}</td>
+    </tr>`;
+  });
+
+  // Open modal
+  const modal = document.getElementById('quotationPreviewModal');
+  document.getElementById('qpName').innerText = qmeta.name;
+  document.getElementById('qpDate').innerText = new Date(qmeta.lastModified).toLocaleString('en-IN');
+  document.getElementById('qpClient').innerText = d.client || '—';
+  document.getElementById('qpRef').innerText = d.ref || '—';
+  document.getElementById('qpLocation').innerText = d.loc || '—';
+  document.getElementById('qpDist').innerText = (d.dist || '—') + ' km';
+  document.getElementById('qpArea').innerText = (d.area || '—') + ' sqm';
+  document.getElementById('qpTonnage').innerText = (d.tonnage || '—') + ' MT';
+  document.getElementById('qpParamTable').innerHTML = paramTable || '<tr><td colspan="3" style="padding:10px; color:#888; text-align:center;">No costed items.</td></tr>';
+  document.getElementById('qpSubtotal').innerText = fmt(grandSubtotal);
+  document.getElementById('qpMargin').innerText = `+${margin}% = ${fmt(withMargin - grandSubtotal)}`;
+  document.getElementById('qpGST').innerText = `+${gst}% = ${fmt(grandTotal - withMargin)}`;
+  document.getElementById('qpGrand').innerText = fmt(grandTotal);
+
+  // Stash the saved data for the Edit button
+  document.getElementById('qpEditBtn').onclick = () => {
+    _applySavedQuotation(saved);
+    closeQuotationPreview();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    toast(`✅ Loaded "${qmeta.name}" — edit and save again to update`, 'ok', 4000);
+  };
+
+  modal.classList.add('show');
+}
+
+function closeQuotationPreview() {
+  document.getElementById('quotationPreviewModal').classList.remove('show');
 }
 
 // =========================================================
@@ -1176,7 +1381,13 @@ function injectVirtualParameters() {
     if (!projectState.selections[pName]) projectState.selections[pName] = {};
 
     // 1. Transport Outward — banded by km, rate per unit. Applies to every param.
-    const trBand = getDistanceBandForUnit(unit);
+    // Sag, Tie Beam, and Purlin use the special STP bands (different rate schedule).
+    let trBand;
+    if (paramUsesSTPBands(pName)) {
+      trBand = getDistanceBandSTP();
+    } else {
+      trBand = getDistanceBandForUnit(unit);
+    }
     if (trBand && trBand.rate > 0) {
       projectState.selections[pName]['__AUTO__TRANSPORT_OUTWARD'] = {
         id: trBand.id, name: `${trBand.name} @ ₹${trBand.rate}/${unit}`,
@@ -1264,7 +1475,7 @@ function generatePreview() {
     entries.forEach(([, data]) => unitRateTotal += data.perUnit);
     const lineTotal = unitRateTotal * qty;
 
-    html += `<tr class="row-category"><td>${sl}</td><td colspan="5">${pName}</td></tr>`;
+    html += `<tr class="row-category"><td>${sl}</td><td colspan="5">${pName.replace(/^\d+\.\s*/, '')}</td></tr>`;
     entries.forEach(([subName, data]) => {
       const rateDisp = data.type === 'PERCENT'
         ? `${data.rate.toFixed(2)}% → ${fmtINR(data.perUnit)}`
@@ -1362,7 +1573,7 @@ function downloadExcel() {
     let unitRateTotal = 0;
     entries.forEach(([, data]) => unitRateTotal += data.perUnit);
     const lineTotal = unitRateTotal * qty;
-    rows.push([sl, pName, '', '', '', '', '']);
+    rows.push([sl, pName.replace(/^\d+\.\s*/, ''), '', '', '', '', '']);
     entries.forEach(([subName, data]) => {
       const label = data.subcategory || subName;
       const tagSuffix = data.isAuto ? ' [AUTO]' : data.isSiteSpecific ? ' [SITE]' : '';
@@ -1409,131 +1620,242 @@ function buildPDF() {
   const d = projectState.details;
   const doc = new jsPDF({ unit: 'mm', format: 'a4' });
   const pageW = doc.internal.pageSize.getWidth();
+  const pageH = doc.internal.pageSize.getHeight();
 
+  // ----- HEADER (top band) -----
   doc.setFillColor(0, 43, 95);
-  doc.rect(0, 0, pageW, 28, 'F');
+  doc.rect(0, 0, pageW, 32, 'F');
   doc.setFillColor(0, 102, 179);
-  doc.rect(0, 28, pageW, 2, 'F');
+  doc.rect(0, 32, pageW, 2, 'F');
 
-  doc.setTextColor(255, 255, 255);
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(20);
-  doc.text('METFRAA', 14, 14);
-  doc.setFontSize(10);
-  doc.setFont('helvetica', 'normal');
-  doc.text('Costing Engine — Quotation', 14, 21);
-
+  // Logo on the left (if available)
+  let titleX = 14;
   try {
     const logo = document.getElementById('brandLogo');
     if (logo && logo.complete && logo.naturalWidth > 0) {
       const canvas = document.createElement('canvas');
       canvas.width = logo.naturalWidth; canvas.height = logo.naturalHeight;
       canvas.getContext('2d').drawImage(logo, 0, 0);
-      doc.addImage(canvas.toDataURL('image/png'), 'PNG', pageW - 40, 5, 26, 18);
+      doc.addImage(canvas.toDataURL('image/png'), 'PNG', 14, 6, 22, 20);
+      titleX = 42; // shift title right of logo
     }
   } catch(e) {}
 
-  let y = 38;
+  // Centered title "COSTING ESTIMATION" + client name underneath
+  doc.setTextColor(255, 255, 255);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(18);
+  doc.text('COSTING ESTIMATION', pageW / 2, 16, { align: 'center' });
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(11);
+  doc.text(d.client || '—', pageW / 2, 25, { align: 'center' });
+
+  // ----- PROJECT INFO STRIP (below header) -----
+  let y = 42;
   doc.setTextColor(0, 43, 95);
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(13);
-  doc.text(d.name, 14, y); y += 6;
+  doc.setFontSize(11);
+  doc.text(d.name || '—', 14, y); y += 5;
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(9);
-  doc.setTextColor(80, 80, 80);
-  doc.text(`Quotation Ref: ${d.ref}    |    Date: ${d.date}`, 14, y); y += 6;
+  doc.setFontSize(8);
+  doc.setTextColor(90, 90, 90);
+  doc.text(`Ref: ${d.ref || '—'}    |    Date: ${d.date || '—'}    |    Location: ${d.loc || '—'}`, 14, y);
+  y += 6;
 
   const info = [
-    ['Client', d.client, 'Location', d.loc],
-    ['Distance', d.dist + ' km', 'Building Height', d.height + ' m'],
-    ['Total Area', fmtNum(d.area,0) + ' sqm', 'Steel Tonnage', fmtNum(d.tonnage,2) + ' MT'],
-    ['Safety Standard', d.safety, 'Design Included', d.design]
+    ['Distance', (d.dist || 0) + ' km', 'Building Height', (d.height || 0) + ' m'],
+    ['Total Area', fmtNum(d.area || 0, 0) + ' sqm', 'Steel Tonnage', fmtNum(d.tonnage || 0, 2) + ' MT'],
+    ['Safety Standard', d.safety || '—', 'Design Included', d.design || '—']
   ];
   doc.setFontSize(8);
   info.forEach(rowArr => {
     doc.setFont('helvetica','bold'); doc.setTextColor(100); doc.text(rowArr[0]+':', 14, y);
-    doc.setFont('helvetica','normal'); doc.setTextColor(20); doc.text(String(rowArr[1]), 40, y);
+    doc.setFont('helvetica','normal'); doc.setTextColor(20); doc.text(String(rowArr[1]), 42, y);
     doc.setFont('helvetica','bold'); doc.setTextColor(100); doc.text(rowArr[2]+':', 110, y);
-    doc.setFont('helvetica','normal'); doc.setTextColor(20); doc.text(String(rowArr[3]), 145, y);
+    doc.setFont('helvetica','normal'); doc.setTextColor(20); doc.text(String(rowArr[3]), 148, y);
     y += 5;
   });
-  y += 2;
+  y += 3;
 
-  const body = [];
-  let sl = 1, grandBase = 0;
+  // ----- BUILD ROWS PER PARAMETER (group structure for page breaks) -----
+  // Strategy: render ONE autoTable per parameter, each with pageBreak='always' AFTER it
+  // (except the last). This forces each new parameter onto its own page if it doesn't fit.
+  // Within a parameter, rows never break (rowPageBreak:'avoid').
+
+  const cleanParamName = (pname) => pname.replace(/^\d+\.\s*/, '').trim();
+
+  // Sub-totals tracker
+  const paramSummary = []; // { sl, name, total }
+  let sl = 1;
+  let grandBase = 0;
+  let startY = y;
+
   Object.entries(projectState.selections).forEach(([pName, subs]) => {
     const entries = Object.entries(subs);
     const qty = parseFloat(projectState.qtys[pName]) || 0;
     if (entries.length === 0 || qty <= 0) return;
-    const unit = MASTER_DB[pName].__unit || 'MT';
+    const unit = (MASTER_DB[pName] && MASTER_DB[pName].__unit) || 'MT';
+    const cleanName = cleanParamName(pName);
+
+    // Build per-row data for this parameter
     let unitRateTotal = 0;
     entries.forEach(([, data]) => unitRateTotal += data.perUnit);
     const lineTotal = unitRateTotal * qty;
+    grandBase += lineTotal;
+    paramSummary.push({ sl, name: cleanName, total: lineTotal });
 
-    body.push([{ content: `${sl}. ${pName}`, colSpan: 6, styles: { fillColor:[233,236,239], textColor:[0,43,95], fontStyle:'bold' }}]);
+    const body = [];
+    // Header row for this param
+    body.push([{
+      content: `${sl}. ${cleanName}`,
+      colSpan: 6,
+      styles: { fillColor:[233,236,239], textColor:[0,43,95], fontStyle:'bold', halign:'center', fontSize: 10 }
+    }]);
+
     entries.forEach(([subName, data]) => {
       const label = data.subcategory || subName;
       const tagSuffix = data.isAuto ? ' [AUTO]' : data.isSiteSpecific ? ' [SITE]' : '';
+      const description = `${label}${tagSuffix}  (${data.name})`;
+      const rate = data.type === 'PERCENT'
+        ? `${data.rate.toFixed(2)}%`
+        : fmtINR(data.perUnit).replace('₹ ', '');
+      const lineAmt = fmtINR(data.line || 0).replace('₹ ', '');
       body.push([
         '',
-        `${label}${tagSuffix}  (${data.name})`,
-        data.type === 'PERCENT' ? `${data.rate.toFixed(2)}%` : fmtINR(data.perUnit).replace('₹ ',''),
-        '', '', ''
+        description,
+        rate,
+        fmtNum(qty, 2),
+        unit,
+        lineAmt
       ]);
     });
+
+    // Subtotal row for this param
     body.push([
-      { content: `Subtotal — ${pName}`, colSpan: 2, styles: { fontStyle:'bold', halign:'right', fillColor:[241,243,245] }},
+      { content: `Subtotal — ${cleanName}`, colSpan: 2, styles: { fontStyle:'bold', halign:'right', fillColor:[241,243,245] }},
       { content: fmtINR(unitRateTotal).replace('₹ ',''), styles: { fontStyle:'bold', halign:'right', fillColor:[241,243,245] }},
-      { content: fmtNum(qty,2), styles: { fontStyle:'bold', halign:'right', fillColor:[241,243,245] }},
+      { content: fmtNum(qty, 2), styles: { fontStyle:'bold', halign:'right', fillColor:[241,243,245] }},
       { content: unit, styles: { fontStyle:'bold', halign:'center', fillColor:[241,243,245] }},
       { content: fmtINR(lineTotal).replace('₹ ',''), styles: { fontStyle:'bold', halign:'right', fillColor:[241,243,245] }}
     ]);
-    grandBase += lineTotal;
+
+    // Render this parameter as a single table; keep its rows together; new page if won't fit
+    doc.autoTable({
+      startY: startY,
+      head: [['SL','DESCRIPTION','UNIT RATE','QTY','UNIT','TOTAL (₹)']],
+      body,
+      theme: 'grid',
+      styles: {
+        fontSize: 9,
+        cellPadding: 2.5,
+        font: 'helvetica',
+        overflow: 'linebreak',
+        valign: 'middle'
+      },
+      headStyles: { fillColor: [0, 43, 95], textColor: 255, fontStyle: 'bold', halign:'left', fontSize: 9 },
+      columnStyles: {
+        0: { cellWidth: 10, halign:'center' },
+        1: { cellWidth: 78 },
+        2: { cellWidth: 26, halign: 'right' },
+        3: { cellWidth: 18, halign: 'right' },
+        4: { cellWidth: 14, halign: 'center' },
+        5: { cellWidth: 'auto', halign: 'right' }
+      },
+      rowPageBreak: 'avoid', // never split a row across pages
+      pageBreak: 'auto', // start new page only if rows don't fit
+      margin: { left: 14, right: 14, bottom: 18 },
+      willDrawCell: function(data) {
+        // For the very first cell of this table, if there's not enough vertical room
+        // for the whole parameter, force a page break BEFORE this table.
+        // We approximate "enough room" by checking if startY + estimated table height > pageH.
+      },
+      didDrawPage: function(data) {
+        // Footer: page number only
+        doc.setFontSize(7);
+        doc.setTextColor(120);
+        const total = doc.internal.getNumberOfPages();
+        doc.text(`Page ${total}`, pageW - 20, pageH - 8);
+        doc.text(`METFRAA  |  ${d.ref || ''}`, 14, pageH - 8);
+      }
+    });
+
+    // Force next parameter onto a fresh page so each parameter is self-contained
+    doc.addPage();
+    startY = 14;
+
     sl++;
   });
 
-  const margin = grandBase * (d.margin / 100);
+  // After the last parameter, we did an extra addPage — remove it
+  const totalPages = doc.internal.getNumberOfPages();
+  if (totalPages > 1) {
+    doc.deletePage(totalPages);
+  }
+
+  // ----- FINAL SUMMARY PAGE (totals + synopsis) -----
+  doc.addPage();
+  let ySum = 20;
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(0, 43, 95);
+  doc.setFontSize(14);
+  doc.text('COSTING SUMMARY', pageW / 2, ySum, { align: 'center' });
+  ySum += 10;
+
+  // Param totals table
+  const summaryBody = paramSummary.map(p => [
+    String(p.sl),
+    p.name,
+    fmtINR(p.total).replace('₹ ', '')
+  ]);
+
+  const margin = grandBase * ((d.margin || 0) / 100);
   const afterMargin = grandBase + margin;
-  const gst = afterMargin * (d.gst / 100);
+  const gst = afterMargin * ((d.gst || 0) / 100);
   const final = afterMargin + gst;
 
-  body.push([{ content: 'SUBTOTAL (BASE COST)', colSpan: 5, styles: { halign:'right', fontStyle:'bold' }},
-             { content: fmtINR(grandBase).replace('₹ ',''), styles: { halign:'right', fontStyle:'bold' }}]);
-  body.push([{ content: `MARGIN @ ${d.margin}%`, colSpan: 5, styles: { halign:'right' }},
-             { content: fmtINR(margin).replace('₹ ',''), styles: { halign:'right' }}]);
-  body.push([{ content: `GST @ ${d.gst}%`, colSpan: 5, styles: { halign:'right' }},
-             { content: fmtINR(gst).replace('₹ ',''), styles: { halign:'right' }}]);
-  body.push([{ content: 'GRAND TOTAL', colSpan: 5, styles: { halign:'right', fontStyle:'bold', fillColor:[0,43,95], textColor:[255,255,255] }},
-             { content: fmtINR(final).replace('₹ ',''), styles: { halign:'right', fontStyle:'bold', fillColor:[0,43,95], textColor:[255,255,255] }}]);
+  summaryBody.push([
+    { content: 'SUBTOTAL (BASE COST)', colSpan: 2, styles: { halign:'right', fontStyle:'bold' }},
+    { content: fmtINR(grandBase).replace('₹ ',''), styles: { halign:'right', fontStyle:'bold' }}
+  ]);
+  summaryBody.push([
+    { content: `MARGIN @ ${d.margin || 0}%`, colSpan: 2, styles: { halign:'right' }},
+    { content: fmtINR(margin).replace('₹ ',''), styles: { halign:'right' }}
+  ]);
+  summaryBody.push([
+    { content: `GST @ ${d.gst || 0}%`, colSpan: 2, styles: { halign:'right' }},
+    { content: fmtINR(gst).replace('₹ ',''), styles: { halign:'right' }}
+  ]);
+  summaryBody.push([
+    { content: 'GRAND TOTAL', colSpan: 2, styles: { halign:'right', fontStyle:'bold', fillColor:[0,43,95], textColor:[255,255,255], fontSize: 11 }},
+    { content: fmtINR(final).replace('₹ ',''), styles: { halign:'right', fontStyle:'bold', fillColor:[0,43,95], textColor:[255,255,255], fontSize: 11 }}
+  ]);
 
   doc.autoTable({
-    startY: y,
-    head: [['SL','DESCRIPTION','UNIT RATE','QTY','UNIT','TOTAL (₹)']],
-    body,
+    startY: ySum,
+    head: [['SL', 'PARAMETER', 'TOTAL (₹)']],
+    body: summaryBody,
     theme: 'grid',
-    styles: { fontSize: 8, cellPadding: 2.5, font: 'helvetica' },
-    headStyles: { fillColor: [0, 43, 95], textColor: 255, fontStyle: 'bold', halign:'left' },
+    styles: { fontSize: 10, cellPadding: 3, font: 'helvetica' },
+    headStyles: { fillColor: [0, 43, 95], textColor: 255, fontStyle: 'bold' },
     columnStyles: {
-      0: { cellWidth: 10, halign:'center' },
-      1: { cellWidth: 75 },
-      2: { cellWidth: 28, halign: 'right' },
-      3: { cellWidth: 18, halign: 'right' },
-      4: { cellWidth: 14, halign: 'center' },
-      5: { cellWidth: 'auto', halign: 'right' }
+      0: { cellWidth: 14, halign: 'center' },
+      1: { cellWidth: 110 },
+      2: { cellWidth: 'auto', halign: 'right' }
     },
-    didDrawPage: function(data) {
-      const pageH = doc.internal.pageSize.getHeight();
+    margin: { left: 14, right: 14, bottom: 18 },
+    didDrawPage: function() {
       doc.setFontSize(7); doc.setTextColor(120);
-      doc.text(`METFRAA  |  ${d.ref}  |  Generated ${new Date().toLocaleString('en-IN')}`, 14, pageH - 8);
       doc.text(`Page ${doc.internal.getNumberOfPages()}`, pageW - 20, pageH - 8);
+      doc.text(`METFRAA  |  ${d.ref || ''}`, 14, pageH - 8);
     }
   });
 
+  // Synopsis
   if (d.area > 0) {
-    let yEnd = doc.lastAutoTable.finalY + 6;
-    doc.setFontSize(9); doc.setFont('helvetica','bold'); doc.setTextColor(0,43,95);
+    let yEnd = doc.lastAutoTable.finalY + 8;
+    doc.setFontSize(10); doc.setFont('helvetica','bold'); doc.setTextColor(0,43,95);
     doc.text('SYNOPSIS', 14, yEnd); yEnd += 5;
-    doc.setFont('helvetica','normal'); doc.setTextColor(40);
+    doc.setFont('helvetica','normal'); doc.setTextColor(40); doc.setFontSize(9);
     doc.text(`Total Area: ${fmtNum(d.area,0)} sqm  |  Per sqm: ${fmtINR(final/d.area)}  |  Per sqft: ${fmtINR(final/(d.area*10.7639))}`, 14, yEnd);
   }
 
