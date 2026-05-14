@@ -96,7 +96,9 @@ async function writeWorkbookToOneDrive(workbook) {
         throw new Error('Failed to acquire access token for Graph API');
     }
 
-    const url = `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(targetEmail)}/drive/root${MASTER_FILE_PATH}/content`;
+    // Graph path syntax for path-addressed items: /drive/root:/<path>:/content
+    // MASTER_FILE_PATH already starts with ':/' so we just need to add ':' before '/content'.
+    const url = `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(targetEmail)}/drive/root${MASTER_FILE_PATH}:/content`;
 
     const resp = await fetch(url, {
         method: 'PUT',
@@ -111,6 +113,7 @@ async function writeWorkbookToOneDrive(workbook) {
     if (!resp.ok) {
         const text = await resp.text();
         console.error('⚠️  writeWorkbookToOneDrive failed:', resp.status, resp.statusText);
+        console.error('   URL was:', url);
         console.error('   Response body:', text.substring(0, 500));
         throw new Error(`Graph PUT failed: ${resp.status} ${resp.statusText} — ${text.substring(0, 200)}`);
     }
