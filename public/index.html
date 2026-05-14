@@ -298,9 +298,7 @@ body { font-family: 'Segoe UI', Tahoma, sans-serif; background: var(--brand-grey
         </div>
         <div class="form-field"><label class="form-label">Erection Safety Type</label>
           <select id="erSafety" class="form-select">
-            <option value="9000">Standard (₹9,000/MT)</option>
-            <option value="12000">Intermediate (₹12,000/MT)</option>
-            <option value="14000">Advanced (₹14,000/MT)</option>
+            <option value="">— loading from master sheet —</option>
           </select>
         </div>
         <div class="form-field"><label class="form-label">Erection Height Surcharge (auto from height)</label>
@@ -408,19 +406,89 @@ let adminPassword = '';
 // =========================================================
 // ERECTION HEIGHT BANDS (hardcoded — Step 1 auto-calc)
 // Returns { rate: ₹/MT, label: 'Up to 10 m' }
-// =========================================================
+// Reads bands from master sheet param "21. ERECTION HEIGHT" (or any param starting
+// with "erection height" after stripping the numeric prefix).
+// Falls back to hardcoded defaults if not in master sheet.
+const HARDCODED_HEIGHT_BANDS = [
+  { rate: 0,    label: 'Up to 10 m',   min: 0,  max: 10 },
+  { rate: 1500, label: '10.01 - 15 m', min: 10, max: 15 },
+  { rate: 3000, label: '15.01 - 20 m', min: 15, max: 20 }
+];
+
+function findHeightBandsNode() {
+  for (const [key, n] of Object.entries(MASTER_DB)) {
+    if (!n) continue;
+    const k = key.trim().toLowerCase().replace(/^\d+\.\s*/, '');
+    if (k === 'erection height' || k.startsWith('erection height')) return n;
+  }
+  return null;
+}
+
 function erectionHeightBand(heightM) {
   const h = parseFloat(heightM) || 0;
-  if (h <= 10) return { rate: 0,    label: 'Up to 10 m' };
-  if (h <= 15) return { rate: 1500, label: 'Up to 15 m' };
-  if (h <= 20) return { rate: 3000, label: 'Up to 20 m' };
-  return { rate: 3000, label: 'Above 20 m (using 20 m rate)' };
+  const node = findHeightBandsNode();
+  if (node && node.subs) {
+    const opts = Object.values(node.subs).flat();
+    const matched = findBandedOption(opts, h);
+    if (matched) return { rate: matched.rate || 0, label: matched.name || '—' };
+    // Above all bands → use the highest band
+    const sorted = opts.filter(o => o.max !== undefined).sort((a, b) => b.max - a.max);
+    if (sorted.length > 0) return { rate: sorted[0].rate || 0, label: `Above ${sorted[0].max} m (using ${sorted[0].name})` };
+  }
+  // Fallback to hardcoded defaults if master sheet doesn't have it
+  for (const b of HARDCODED_HEIGHT_BANDS) {
+    if (h >= b.min && h <= b.max) return { rate: b.rate, label: b.label };
+  }
+  const last = HARDCODED_HEIGHT_BANDS[HARDCODED_HEIGHT_BANDS.length - 1];
+  return { rate: last.rate, label: `Above 20 m (using ${last.label} rate)` };
 }
 
 function updateErectionHeightDisplay() {
   const h = parseFloat(document.getElementById('projHeight').value) || 0;
   const band = erectionHeightBand(h);
   document.getElementById('erHeightDisplay').value = `${band.label} → ₹${band.rate.toLocaleString('en-IN')}/MT`;
+}
+
+// Populate Erection Safety dropdown from master sheet param "20. ERECTION SAFETY".
+// Falls back to hardcoded options if param missing.
+const HARDCODED_SAFETY_OPTIONS = [
+  { rate: 9000,  label: 'Standard' },
+  { rate: 12000, label: 'Intermediate' },
+  { rate: 14000, label: 'Advanced' }
+];
+
+function populateErectionSafetyDropdown() {
+  const sel = document.getElementById('erSafety');
+  if (!sel) return;
+  const prevValue = sel.value;
+  sel.innerHTML = '';
+
+  // Find param "20. ERECTION SAFETY" or anything stripped that equals "erection safety"
+  let node = null;
+  for (const [key, n] of Object.entries(MASTER_DB)) {
+    if (!n) continue;
+    const k = key.trim().toLowerCase().replace(/^\d+\.\s*/, '');
+    if (k === 'erection safety' || k.startsWith('erection safety')) { node = n; break; }
+  }
+
+  let opts;
+  if (node && node.subs) {
+    opts = Object.values(node.subs).flat().map(o => ({ rate: o.rate || 0, label: o.name || '—' }));
+  } else {
+    opts = HARDCODED_SAFETY_OPTIONS;
+  }
+
+  opts.forEach(o => {
+    const optEl = document.createElement('option');
+    optEl.value = String(o.rate);
+    optEl.textContent = `${o.label} (₹${o.rate.toLocaleString('en-IN')}/MT)`;
+    sel.appendChild(optEl);
+  });
+
+  // Restore previous selection if it still matches a value
+  if (prevValue && [...sel.options].some(o => o.value === prevValue)) {
+    sel.value = prevValue;
+  }
 }
 
 // =========================================================
@@ -565,7 +633,10 @@ function getPaintSelection() {
 // =========================================================
 function isStep1ManagedParam(name) {
   const stripped = String(name).trim().toLowerCase().replace(/^\d+\.\s*/, '');
-  return stripped.startsWith('distance') || stripped === 'paint';
+  return stripped.startsWith('distance')
+      || stripped === 'paint'
+      || stripped.startsWith('erection safety')
+      || stripped.startsWith('erection height');
 }
 
 function renderQtyTable() {
@@ -852,7 +923,9 @@ async function loadDB(showRefreshToast) {
 
     initSidebar();
     populatePaintDropdown();
+    populateErectionSafetyDropdown();
     updateDistanceBandDisplay();
+    updateErectionHeightDisplay();
     renderQtyTable();
     loadRecentQuotations();
     document.getElementById('nextBtn').disabled = false;
