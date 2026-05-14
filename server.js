@@ -83,14 +83,37 @@ const BOOTSTRAP_PAINT = [
 // they get added to the header on bootstrap.
 const REQUIRED_COLUMNS = ['Parameter Name','Subcategory','Option ID','Option Name','Rate','Type','Unit','Min','Max'];
 
-// Write rows back to OneDrive, preserving column order
+// Write rows back to OneDrive, preserving column order.
+// Uses raw fetch (not Graph SDK) so we have full control over Content-Type — the SDK
+// has been observed to override headers for binary uploads in some versions.
 async function writeWorkbookToOneDrive(workbook) {
     const targetEmail = process.env.TARGET_USER_EMAIL;
     const outBuffer = xlsx.write(workbook, { type: 'buffer', bookType: 'xlsx' });
-    await graphClient
-        .api(`/users/${targetEmail}/drive/root${MASTER_FILE_PATH}/content`)
-        .header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-        .put(outBuffer);
+
+    // Get a fresh access token from the credential
+    const tokenResp = await credential.getToken('https://graph.microsoft.com/.default');
+    if (!tokenResp || !tokenResp.token) {
+        throw new Error('Failed to acquire access token for Graph API');
+    }
+
+    const url = `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(targetEmail)}/drive/root${MASTER_FILE_PATH}/content`;
+
+    const resp = await fetch(url, {
+        method: 'PUT',
+        headers: {
+            'Authorization': `Bearer ${tokenResp.token}`,
+            'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'Content-Length': String(outBuffer.length)
+        },
+        body: outBuffer
+    });
+
+    if (!resp.ok) {
+        const text = await resp.text();
+        console.error('⚠️  writeWorkbookToOneDrive failed:', resp.status, resp.statusText);
+        console.error('   Response body:', text.substring(0, 500));
+        throw new Error(`Graph PUT failed: ${resp.status} ${resp.statusText} — ${text.substring(0, 200)}`);
+    }
 }
 
 // Returns true if the workbook was modified
