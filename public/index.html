@@ -193,6 +193,39 @@ body { font-family: 'Segoe UI', Tahoma, sans-serif; background: var(--brand-grey
 </div>
 
 <!-- Quotation Preview Modal (View/Edit recent quotations) -->
+<!-- Add Parameter modal -->
+<div id="addParameterModal" class="modal-bg">
+  <div class="modal" style="min-width:420px; max-width:520px;">
+    <h3>Add New Parameter</h3>
+    <p style="font-size:12px; color:#666; margin-bottom:14px;">Creates a new costing parameter at the end of the materials list. Pick which subcategories it should have — you can fill in rates afterward using "+ Add Row" under the new parameter.</p>
+    <div class="form-field" style="margin-bottom:10px;">
+      <label class="form-label">Parameter Name</label>
+      <input type="text" id="newParamName" class="form-input" placeholder="e.g. Mezzanine Flooring">
+    </div>
+    <div class="form-field" style="margin-bottom:14px;">
+      <label class="form-label">Unit</label>
+      <select id="newParamUnit" class="form-select">
+        <option value="MT">MT (tonnes)</option>
+        <option value="sqm">sqm (square metres)</option>
+        <option value="rmt">rmt (running metres)</option>
+        <option value="nos">nos (count)</option>
+      </select>
+    </div>
+    <div class="form-field" style="margin-bottom:14px;">
+      <label class="form-label">Subcategories to include</label>
+      <div id="newParamSubcats" style="display:grid; grid-template-columns:1fr 1fr; gap:6px; font-size:13px; margin-top:6px;"></div>
+      <div style="margin-top:6px;">
+        <button onclick="toggleAllSubcats(true)" style="font-size:11px; border:none; background:none; color:var(--brand-primary); cursor:pointer;">Select all</button> ·
+        <button onclick="toggleAllSubcats(false)" style="font-size:11px; border:none; background:none; color:#888; cursor:pointer;">Clear</button>
+      </div>
+    </div>
+    <div style="display:flex; gap:10px; justify-content:flex-end;">
+      <button class="btn btn-secondary" onclick="closeAddParameterModal()">Cancel</button>
+      <button class="btn btn-warn" onclick="submitAddParameter()" id="addParamSubmitBtn">💾 Create Parameter</button>
+    </div>
+  </div>
+</div>
+
 <div id="quotationPreviewModal" class="modal-bg">
   <div class="modal" style="min-width:560px; max-width:720px; max-height:85vh; overflow-y:auto;">
     <div style="display:flex; justify-content:space-between; align-items:start; margin-bottom:14px;">
@@ -387,7 +420,10 @@ body { font-family: 'Segoe UI', Tahoma, sans-serif; background: var(--brand-grey
     <div class="card">
       <div class="section-title">
         <span>Master Rate Editor</span>
-        <button class="btn btn-warn" onclick="saveMasterRates()" id="saveRatesBtn">💾 Save Changes to OneDrive</button>
+        <div style="display:flex; gap:10px;">
+          <button class="btn btn-primary" onclick="showAddParameterModal()" id="addParamBtn">+ Add Parameter</button>
+          <button class="btn btn-warn" onclick="saveMasterRates()" id="saveRatesBtn">💾 Save Changes to OneDrive</button>
+        </div>
       </div>
       <p style="font-size:12px; color:#666; margin-bottom:15px;">Edit rates below. Changed cells turn yellow. PERCENT rows store the percentage value, RATE rows store ₹. Click Save to push back to the master Excel sheet — the app will auto-reload.</p>
       <div id="ratesContainer"></div>
@@ -2373,6 +2409,78 @@ function renderRatesEditor() {
 // =========================================================
 // ADD / DELETE PAINT TYPE
 // =========================================================
+// =========================================================
+// ADD PARAMETER (Settings)
+// =========================================================
+function showAddParameterModal() {
+  // Build subcategory checkboxes from the standard 9
+  const box = document.getElementById('newParamSubcats');
+  box.innerHTML = '';
+  SUBCAT_ORDER.forEach((sub, i) => {
+    const id = 'npsub_' + i;
+    const isAuto = ['TRANSPORT OUTWARD','FINISHING','FIXING / ERECTION'].includes(sub);
+    const label = document.createElement('label');
+    label.style.cssText = 'display:flex; align-items:center; gap:6px; cursor:pointer;';
+    label.innerHTML = `<input type="checkbox" id="${id}" value="${sub}" checked>
+      <span>${sub}${isAuto ? ' <span style="color:#0066B3; font-size:10px;">(auto)</span>' : ''}</span>`;
+    box.appendChild(label);
+  });
+  document.getElementById('newParamName').value = '';
+  document.getElementById('newParamUnit').value = 'MT';
+  document.getElementById('addParameterModal').classList.add('show');
+  setTimeout(() => document.getElementById('newParamName').focus(), 50);
+}
+
+function closeAddParameterModal() {
+  document.getElementById('addParameterModal').classList.remove('show');
+}
+
+function toggleAllSubcats(state) {
+  document.querySelectorAll('#newParamSubcats input[type=checkbox]').forEach(cb => cb.checked = state);
+}
+
+async function submitAddParameter() {
+  const name = document.getElementById('newParamName').value.trim();
+  const unit = document.getElementById('newParamUnit').value;
+  const subs = [...document.querySelectorAll('#newParamSubcats input:checked')].map(cb => cb.value);
+
+  if (!name) { toast('Parameter name required', 'err'); return; }
+  if (subs.length === 0) { toast('Pick at least one subcategory', 'err'); return; }
+
+  if (adminProtected && !adminPassword) {
+    toast('Admin password required', 'err');
+    showPwModal();
+    return;
+  }
+
+  const btn = document.getElementById('addParamSubmitBtn');
+  btn.disabled = true; btn.innerText = 'Creating...';
+  try {
+    const headers = { 'Content-Type': 'application/json' };
+    if (adminPassword) headers['x-admin-password'] = adminPassword;
+    const res = await fetch(`${RENDER_URL}/api/add-parameter`, {
+      method: 'POST', headers,
+      body: JSON.stringify({ paramName: name, unit, subcategories: subs })
+    });
+    const data = await res.json();
+    if (res.status === 401) {
+      adminPassword = '';
+      toast('❌ Session expired — re-enter password', 'err');
+      showPwModal();
+      return;
+    }
+    if (!data.success) throw new Error(data.error || 'Failed');
+    toast(`✅ Parameter "${name}" created with ${data.rowsAdded} subcategories`, 'ok', 4000);
+    closeAddParameterModal();
+    await loadDB(false);
+    renderRatesEditor();
+  } catch (e) {
+    toast('❌ ' + e.message, 'err', 5000);
+  } finally {
+    btn.disabled = false; btn.innerText = '💾 Create Parameter';
+  }
+}
+
 function showAddPaintModal() {
   const name = prompt('New Paint Type name (e.g. "Marine Grade Epoxy"):');
   if (!name || !name.trim()) return;
