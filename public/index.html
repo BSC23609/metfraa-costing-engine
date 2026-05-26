@@ -443,6 +443,25 @@ let projectState = { details: {}, qtys: {}, selections: {}, siteSpecific: {} };
 function cleanParamLabel(pname) {
   return String(pname || '').replace(/^\d+\.\s*/, '').trim();
 }
+
+// An option whose NAME signals an intentional absence (so a 0 rate/percent is legitimate,
+// not an unfilled placeholder). E.g. "NIL", "Not Included", "NA", "None".
+function isAbsenceOption(name) {
+  const n = String(name || '').trim().toLowerCase();
+  if (!n) return false;
+  // matches: nil, na, n/a, none, not included, not applicable, not available, no/without ...
+  return /\b(nil|na|n\/a|none|not\s+(included|applicable|available)|without|no\s+\w+)\b/.test(n)
+      || n === 'nil' || n === 'na' || n === 'none' || n === '-' || n === '0';
+}
+
+// Is an option an unfilled placeholder (real name, but rate 0)? Then it's "not available".
+function isUnavailableOption(o) {
+  const r = o.rate || 0;
+  if (o.type !== 'RATE') return false;       // PERCENT 0 (e.g. NIL wastage) is always valid
+  if (r !== 0) return false;                  // has a price -> available
+  if (isAbsenceOption(o.name)) return false;  // named like an absence -> legit zero
+  return true;                                // real name + zero rate -> placeholder, grey out
+}
 let activeP = null;
 let dirtyRates = {};
 let adminProtected = false;
@@ -1340,7 +1359,7 @@ function buildOptionsHtml(opts, selectedId) {
 
   const optHtml = (o) => {
     const r = o.rate || 0;
-    const unavailable = (o.type === 'RATE' && r === 0);
+    const unavailable = isUnavailableOption(o);
     const label = o.type === 'PERCENT' ? `${o.name} (${r}%)`
                 : unavailable ? `${o.name} (not available)`
                 : `${o.name} — ₹${r.toLocaleString('en-IN')}`;
