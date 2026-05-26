@@ -81,7 +81,7 @@ const BOOTSTRAP_PAINT = [
 
 // Required columns in the canonical order. If any are missing from the sheet,
 // they get added to the header on bootstrap.
-const REQUIRED_COLUMNS = ['Parameter Name','Subcategory','Option ID','Option Name','Rate','Type','Unit','Min','Max'];
+const REQUIRED_COLUMNS = ['Parameter Name','Subcategory','Option ID','Option Name','Rate','Type','Unit','Min','Max','Group','Remark'];
 
 // Write rows back to OneDrive, preserving column order.
 // Uses raw fetch (not Graph SDK) so we have full control over Content-Type — the SDK
@@ -243,11 +243,18 @@ app.get('/api/master-data', async (req, res) => {
 
             const type = (row['Type'] || 'RATE').toString().toUpperCase().trim();
 
+            let normType;
+            if (type === 'AUTO') normType = 'AUTO';
+            else if (type === 'PERCENT' || type === 'PERCENTAGE' || type === '%') normType = 'PERCENT';
+            else normType = 'RATE';
+
             const opt = {
                 id: row['Option ID'],
                 name: row['Option Name'],
                 rate: parseFloat(rate) || 0,
-                type: (type === 'PERCENT' || type === 'PERCENTAGE' || type === '%') ? 'PERCENT' : 'RATE'
+                type: normType,
+                group: (row['Group'] !== undefined && row['Group'] !== null) ? String(row['Group']).trim() : '',
+                remark: (row['Remark'] !== undefined && row['Remark'] !== null) ? String(row['Remark']).trim() : ''
             };
 
             // Optional Min/Max columns for banded options (e.g. Distance bands)
@@ -587,12 +594,14 @@ app.post('/api/add-master-row', async (req, res) => {
     try {
         if (!isAdmin(req)) return res.status(401).json({ success: false, error: 'Unauthorised' });
 
-        let { paramName, subcategory, optionName, rate, type, unit } = req.body;
+        let { paramName, subcategory, optionName, rate, type, unit, group, remark } = req.body;
         paramName = String(paramName || '').trim();
         subcategory = String(subcategory || '').trim();
         optionName = String(optionName || '').trim();
         type = String(type || 'RATE').toUpperCase().trim();
         unit = String(unit || 'MT').trim();
+        group = String(group || '').trim();
+        remark = String(remark || '').trim();
         const numRate = Number(rate);
 
         if (!paramName) return res.status(400).json({ success: false, error: 'Parameter name required' });
@@ -627,7 +636,9 @@ app.post('/api/add-master-row', async (req, res) => {
             'Unit': unit,
             'Type': type,
             'Min': '',
-            'Max': ''
+            'Max': '',
+            'Group': group,
+            'Remark': remark
         });
 
         let header = (xlsx.utils.sheet_to_json(sheet, { header: 1 })[0] || []).map(String);
