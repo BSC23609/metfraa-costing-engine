@@ -673,11 +673,13 @@ app.post('/api/add-parameter', async (req, res) => {
     try {
         if (!isAdmin(req)) return res.status(401).json({ success: false, error: 'Unauthorised' });
 
-        let { paramName, unit, subcategories } = req.body;
+        let { paramName, unit, subcategories, options } = req.body;
         paramName = String(paramName || '').trim();
         unit = String(unit || 'MT').trim();
         if (!Array.isArray(subcategories)) subcategories = [];
         subcategories = subcategories.map(s => String(s || '').trim()).filter(Boolean);
+        // options is an optional map: { "RM COST": [{name, rate, type, group, remark}, ...], ... }
+        if (!options || typeof options !== 'object') options = {};
 
         if (!paramName) return res.status(400).json({ success: false, error: 'Parameter name required' });
         if (subcategories.length === 0) return res.status(400).json({ success: false, error: 'Pick at least one subcategory' });
@@ -688,14 +690,12 @@ app.post('/api/add-parameter', async (req, res) => {
         const sheet = workbook.Sheets[sheetName];
         const rawData = xlsx.utils.sheet_to_json(sheet);
 
-        // Reject if a parameter with the same display name already exists
         const stripNum = s => String(s || '').trim().toLowerCase().replace(/^\d+\.\s*/, '');
         const existingNames = new Set(rawData.map(r => stripNum(r['Parameter Name'])));
         if (existingNames.has(stripNum(paramName))) {
             return res.status(400).json({ success: false, error: 'A parameter with that name already exists' });
         }
 
-        // Determine the next numeric prefix (kept in Excel for ordering, hidden in app)
         let maxNum = 0;
         rawData.forEach(r => {
             const m = String(r['Parameter Name'] || '').match(/^(\d+)\./);
@@ -704,27 +704,68 @@ app.post('/api/add-parameter', async (req, res) => {
         const newPrefix = `${maxNum + 1}. `;
         const fullParamName = newPrefix + paramName.replace(/^\d+\.\s*/, '');
 
-        // Build new rows (one per subcategory)
         const cleanP = paramName.replace(/^\d+\.\s*/, '').replace(/[^A-Z0-9]/gi, '').toUpperCase().slice(0, 4) || 'NEWP';
-        const newRows = subcategories.map((sub, i) => {
+
+        // Build new rows: one per option for each subcategory.
+        // If no options provided for a subcat, write one empty placeholder row (legacy behaviour).
+        const newRows = [];
+        subcategories.forEach(sub => {
             const isAuto = AUTO_SUBCATS.has(sub.toUpperCase().trim());
             const s3 = sub.replace(/[^A-Z0-9]/gi, '').toUpperCase().slice(0, 3) || 'XX';
-            return {
-                'Parameter Name': fullParamName,
-                'Subcategory': sub,
-                'Option ID': `${cleanP}-${s3}-01`,
-                'Option Name': isAuto ? '(auto from Step 1)' : '',
-                'Rate': 0,
-                'Unit': unit,
-                'Type': isAuto ? 'AUTO' : 'RATE',
-                'Min': '',
-                'Max': '',
-                'Group': '',
-                'Remark': isAuto ? 'Filled from Step 1 selection' : ''
-            };
+            const subOpts = Array.isArray(options[sub]) ? options[sub].filter(o => o && (o.name || o.rate)) : [];
+
+            if (isAuto) {
+                // AUTO subcats always get one marker row, options are ignored
+                newRows.push({
+                    'Parameter Name': fullParamName,
+                    'Subcategory': sub,
+                    'Option ID': `${cleanP}-${s3}-01`,
+                    'Option Name': '(auto from Step 1)',
+                    'Rate': 0,
+                    'Unit': unit,
+                    'Type': 'AUTO',
+                    'Min': '', 'Max': '',
+                    'Group': '',
+                    'Remark': 'Filled from Step 1 selection'
+                });
+                return;
+            }
+
+            if (subOpts.length === 0) {
+                // Empty placeholder
+                newRows.push({
+                    'Parameter Name': fullParamName,
+                    'Subcategory': sub,
+                    'Option ID': `${cleanP}-${s3}-01`,
+                    'Option Name': '',
+                    'Rate': 0,
+                    'Unit': unit,
+                    'Type': 'RATE',
+                    'Min': '', 'Max': '',
+                    'Group': '',
+                    'Remark': ''
+                });
+                return;
+            }
+
+            subOpts.forEach((o, i) => {
+                const rawType = String(o.type || 'RATE').toUpperCase().trim();
+                const type = (rawType === 'PERCENT' || rawType === 'PERCENTAGE' || rawType === '%') ? 'PERCENT' : 'RATE';
+                newRows.push({
+                    'Parameter Name': fullParamName,
+                    'Subcategory': sub,
+                    'Option ID': `${cleanP}-${s3}-${String(i+1).padStart(2,'0')}`,
+                    'Option Name': String(o.name || '').trim(),
+                    'Rate': Number(o.rate) || 0,
+                    'Unit': unit,
+                    'Type': type,
+                    'Min': '', 'Max': '',
+                    'Group': String(o.group || '').trim(),
+                    'Remark': String(o.remark || '').trim()
+                });
+            });
         });
 
-        // Insert before the first global-rate parameter (so it lands at end of materials)
         let insertIdx = rawData.length;
         for (let i = 0; i < rawData.length; i++) {
             if (isGlobalParamName(rawData[i]['Parameter Name'])) { insertIdx = i; break; }
@@ -733,13 +774,101 @@ app.post('/api/add-parameter', async (req, res) => {
 
         let header = (xlsx.utils.sheet_to_json(sheet, { header: 1 })[0] || []).map(String);
         REQUIRED_COLUMNS.forEach(col => { if (!header.includes(col)) header.push(col); });
-        const newSheet = xlsx.utils.json_to_sheet(updated, { header });
-        workbook.Sheets[sheetName] = newSheet;
+        workbook.Sheets[sheetName] = xlsx.utils.json_to_sheet(updated, { header });
 
         await writeWorkbookToOneDrive(workbook);
         res.json({ success: true, paramName: fullParamName, subcategories, rowsAdded: newRows.length });
     } catch (error) {
         console.error('Add Parameter Error:', error.message);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// =============================================================
+// ROUTE: Update an existing option (full field edit except ID)
+// Body: { id, paramName?, subcategory?, optionName?, rate?, type?, unit?, group?, remark?, min?, max? }
+// Only fields present in the body are updated. id is the lookup key (immutable).
+// =============================================================
+app.post('/api/update-option', async (req, res) => {
+    try {
+        if (!isAdmin(req)) return res.status(401).json({ success: false, error: 'Unauthorised' });
+
+        const { id } = req.body;
+        if (!id) return res.status(400).json({ success: false, error: 'Option ID required' });
+
+        const buffer = await downloadMasterBuffer();
+        const workbook = xlsx.read(buffer, { type: 'buffer' });
+        const sheetName = pickDataSheet(workbook);
+        const sheet = workbook.Sheets[sheetName];
+        const rawData = xlsx.utils.sheet_to_json(sheet);
+
+        const rowIdx = rawData.findIndex(r => String(r['Option ID']) === String(id));
+        if (rowIdx === -1) return res.status(404).json({ success: false, error: `Option ID "${id}" not found` });
+
+        const fieldMap = {
+            paramName:    'Parameter Name',
+            subcategory:  'Subcategory',
+            optionName:   'Option Name',
+            rate:         'Rate',
+            type:         'Type',
+            unit:         'Unit',
+            group:        'Group',
+            remark:       'Remark',
+            min:          'Min',
+            max:          'Max'
+        };
+        Object.entries(fieldMap).forEach(([bodyKey, colName]) => {
+            if (req.body[bodyKey] === undefined) return;
+            let v = req.body[bodyKey];
+            if (bodyKey === 'rate') v = Number(v);
+            if (bodyKey === 'type') v = String(v).toUpperCase().trim();
+            if (bodyKey === 'min' || bodyKey === 'max') v = (v === '' || v === null) ? '' : Number(v);
+            if (typeof v === 'string') v = v.trim();
+            rawData[rowIdx][colName] = v;
+        });
+
+        let header = (xlsx.utils.sheet_to_json(sheet, { header: 1 })[0] || []).map(String);
+        REQUIRED_COLUMNS.forEach(col => { if (!header.includes(col)) header.push(col); });
+        workbook.Sheets[sheetName] = xlsx.utils.json_to_sheet(rawData, { header });
+
+        await writeWorkbookToOneDrive(workbook);
+        res.json({ success: true, id, row: rawData[rowIdx] });
+    } catch (error) {
+        console.error('Update Option Error:', error.message);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// =============================================================
+// ROUTE: Delete an option by ID
+// Body: { id }
+// =============================================================
+app.post('/api/delete-option', async (req, res) => {
+    try {
+        if (!isAdmin(req)) return res.status(401).json({ success: false, error: 'Unauthorised' });
+
+        const { id } = req.body;
+        if (!id) return res.status(400).json({ success: false, error: 'Option ID required' });
+
+        const buffer = await downloadMasterBuffer();
+        const workbook = xlsx.read(buffer, { type: 'buffer' });
+        const sheetName = pickDataSheet(workbook);
+        const sheet = workbook.Sheets[sheetName];
+        const rawData = xlsx.utils.sheet_to_json(sheet);
+
+        const rowIdx = rawData.findIndex(r => String(r['Option ID']) === String(id));
+        if (rowIdx === -1) return res.status(404).json({ success: false, error: `Option ID "${id}" not found` });
+
+        const removed = rawData.splice(rowIdx, 1)[0];
+
+        let header = (xlsx.utils.sheet_to_json(sheet, { header: 1 })[0] || []).map(String);
+        REQUIRED_COLUMNS.forEach(col => { if (!header.includes(col)) header.push(col); });
+        workbook.Sheets[sheetName] = xlsx.utils.json_to_sheet(rawData, { header });
+
+        await writeWorkbookToOneDrive(workbook);
+        res.json({ success: true, id, removed });
+    } catch (error) {
+        console.error('Delete Option Error:', error.message);
         res.status(500).json({ success: false, error: error.message });
     }
 });
