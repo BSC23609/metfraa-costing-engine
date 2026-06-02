@@ -2313,27 +2313,32 @@ function buildPDF() {
   const pageW = doc.internal.pageSize.getWidth();
   const pageH = doc.internal.pageSize.getHeight();
 
-  // ----- HEADER (top band) -----
-  doc.setFillColor(0, 43, 95);
+  // ----- HEADER (white band, dark text, teal divider) -----
+  doc.setFillColor(255, 255, 255);
   doc.rect(0, 0, pageW, 32, 'F');
   doc.setFillColor(0, 102, 179);
-  doc.rect(0, 32, pageW, 2, 'F');
+  doc.rect(0, 32, pageW, 1.5, 'F');
 
-  // Logo on the left (if available)
-  let titleX = 14;
+  // Logo on the left (aspect-preserved within 22mm height)
+  const LOGO_H = 22; // mm
+  const LOGO_TOP = 5; // mm
+  let logoRenderedW = 0;
   try {
     const logo = document.getElementById('brandLogo');
     if (logo && logo.complete && logo.naturalWidth > 0) {
       const canvas = document.createElement('canvas');
-      canvas.width = logo.naturalWidth; canvas.height = logo.naturalHeight;
+      canvas.width = logo.naturalWidth;
+      canvas.height = logo.naturalHeight;
       canvas.getContext('2d').drawImage(logo, 0, 0);
-      doc.addImage(canvas.toDataURL('image/png'), 'PNG', 14, 6, 22, 20);
-      titleX = 42; // shift title right of logo
+      // Preserve aspect ratio: scale width to maintain natural ratio at LOGO_H height
+      const aspect = logo.naturalWidth / logo.naturalHeight;
+      logoRenderedW = LOGO_H * aspect;
+      doc.addImage(canvas.toDataURL('image/png'), 'PNG', 8, LOGO_TOP, logoRenderedW, LOGO_H);
     }
-  } catch(e) {}
+  } catch (e) {}
 
-  // Centered title "COSTING ESTIMATION" + client name (primary) + project name (smaller)
-  doc.setTextColor(255, 255, 255);
+  // Title "COSTING ESTIMATION" + client (bold) + project (smaller) — all dark navy on white
+  doc.setTextColor(0, 43, 95);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(18);
   doc.text('COSTING ESTIMATION', pageW / 2, 14, { align: 'center' });
@@ -2342,7 +2347,10 @@ function buildPDF() {
   doc.text(d.client || '—', pageW / 2, 22, { align: 'center' });
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(9);
+  doc.setTextColor(80, 80, 80);
   doc.text(d.name || '—', pageW / 2, 28, { align: 'center' });
+  // Reset text colour for the rest of the document
+  doc.setTextColor(0, 0, 0);
 
   // ----- PROJECT INFO STRIP (below header) -----
   let y = 42;
