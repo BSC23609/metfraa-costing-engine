@@ -276,7 +276,7 @@ app.get('/api/master-data', async (req, res) => {
 // =============================================================
 app.post('/api/save-quotation', async (req, res) => {
     try {
-        const { projectName, date, pdfBase64, jsonData } = req.body;
+        const { projectName, clientName, date, pdfBase64, jsonData } = req.body;
         if (!projectName || !date) {
             return res.status(400).json({ success: false, error: 'Missing projectName or date' });
         }
@@ -285,7 +285,14 @@ app.post('/api/save-quotation', async (req, res) => {
         }
 
         const targetEmail = process.env.TARGET_USER_EMAIL;
-        const safeName = `${sanitizeName(projectName)}_${sanitizeName(date)}`;
+        // Filename = client_project_date (client first; project + date follow for uniqueness)
+        const parts = [];
+        if (clientName && String(clientName).trim() && String(clientName).trim() !== '—') {
+            parts.push(sanitizeName(clientName));
+        }
+        parts.push(sanitizeName(projectName));
+        parts.push(sanitizeName(date));
+        const safeName = parts.join('_');
         const results = {};
 
         // Save PDF

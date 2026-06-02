@@ -193,6 +193,43 @@ body { font-family: 'Segoe UI', Tahoma, sans-serif; background: var(--brand-grey
 </div>
 
 <!-- Quotation Preview Modal (View/Edit recent quotations) -->
+<!-- Quick Add Option (Settings) -->
+<div id="addOptionModal" class="modal-bg">
+  <div class="modal" style="min-width:420px; max-width:520px;">
+    <h3 id="addOptionTitle">Add Option</h3>
+    <p style="font-size:12px; color:#666; margin-bottom:14px;" id="addOptionSubtitle">Adding to: …</p>
+    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px;">
+      <div class="form-field" style="grid-column: span 2;">
+        <label class="form-label">Option Name</label>
+        <input type="text" id="ao_name" class="form-input" placeholder="e.g. Grade A">
+      </div>
+      <div class="form-field">
+        <label class="form-label">Rate / %</label>
+        <input type="number" id="ao_rate" class="form-input" value="0" step="0.01">
+      </div>
+      <div class="form-field">
+        <label class="form-label">Type</label>
+        <select id="ao_type" class="form-select">
+          <option value="RATE">₹ RATE</option>
+          <option value="PERCENT">% PERCENT</option>
+        </select>
+      </div>
+      <div class="form-field">
+        <label class="form-label">Group <span style="color:#999; font-size:10px;">(optional)</span></label>
+        <input type="text" id="ao_group" class="form-input" placeholder="e.g. GI / PVC">
+      </div>
+      <div class="form-field">
+        <label class="form-label">Remark <span style="color:#999; font-size:10px;">(optional)</span></label>
+        <input type="text" id="ao_remark" class="form-input">
+      </div>
+    </div>
+    <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:16px;">
+      <button class="btn btn-secondary" onclick="closeAddOptionModal()">Cancel</button>
+      <button class="btn btn-warn" onclick="submitAddOption()" id="aoSubmitBtn">💾 Add Option</button>
+    </div>
+  </div>
+</div>
+
 <!-- Option Editor modal (Edit existing option in Settings) -->
 <div id="optionEditorModal" class="modal-bg">
   <div class="modal" style="min-width:440px; max-width:540px;">
@@ -387,7 +424,7 @@ body { font-family: 'Segoe UI', Tahoma, sans-serif; background: var(--brand-grey
         <div class="form-field"><label class="form-label">Distance from Vichoor (km)</label><input type="number" id="projDist" class="form-input" value="500"></div>
         <div class="form-field"><label class="form-label">Building Height (m)</label><input type="number" id="projHeight" class="form-input" value="8" step="0.1"></div>
         <div class="form-field"><label class="form-label">Total Area (sqm)</label><input type="number" id="projArea" class="form-input" value="0"></div>
-        <div class="form-field"><label class="form-label">Steel Tonnage (MT)</label><input type="number" id="projTonnage" class="form-input" value="100"></div>
+        <div class="form-field"><label class="form-label">Steel Tonnage (MT) <span style="color:#999;font-size:10px;">(auto: sum of MT param qtys)</span></label><input type="text" id="projTonnage" class="form-input" value="0" readonly style="background:#f5f5f5;color:#555;font-weight:600;"></div>
         <div class="form-field"><label class="form-label">Safety Standard</label><select id="projSafety" class="form-select"><option>Average</option><option>Above Average</option><option>High</option></select></div>
         <div class="form-field"><label class="form-label">Design Included</label><select id="projDesign" class="form-select"><option>Yes</option><option>No</option></select></div>
       </div>
@@ -438,7 +475,16 @@ body { font-family: 'Segoe UI', Tahoma, sans-serif; background: var(--brand-grey
       <div class="param-list" id="sidebar"></div>
       <div class="workspace card">
         <h3 id="activeTitle" style="color:var(--brand-primary); margin-bottom:5px;">Parameter</h3>
-        <div id="activeUnitInfo" style="font-size:12px; color:#6c757d; margin-bottom:15px;"></div>
+        <div id="activeUnitInfo" style="font-size:12px; color:#6c757d; margin-bottom:8px;"></div>
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; padding:8px 12px; background:#f8f9fa; border:1px solid #e9ecef; border-radius:6px;">
+          <div style="font-size:11px; color:#6c757d;">
+            <span style="color:#28a745;">●</span> <span id="autosaveStatus">Auto-saved locally</span>
+          </div>
+          <div style="display:flex; gap:6px;">
+            <button class="btn btn-secondary" style="padding:5px 12px; font-size:11px;" onclick="manualLocalSave()" title="Force a local save now">💾 Save Now</button>
+            <button class="btn btn-primary" style="padding:5px 12px; font-size:11px;" onclick="saveCurrentToCloud()" id="saveCloudBtn" title="Push entire quotation to OneDrive">☁ Save to OneDrive</button>
+          </div>
+        </div>
         <table class="report-table">
           <thead>
             <tr><th>SUBCATEGORY</th><th>SELECTION</th><th width="110">RATE / %</th><th width="90">QTY</th><th width="120">TOTAL</th><th width="140">REMARK</th></tr>
@@ -1034,6 +1080,12 @@ window.onload = async () => {
   updateErectionHeightDisplay();
   await checkAuthMode();
   await loadDB(false);
+  // Restore any locally-autosaved draft so a refresh doesn't lose work
+  if (restoreFromLocalSave()) {
+    toast('🔄 Restored unsaved draft from local storage', 'ok', 4000);
+    renderQtyTable && renderQtyTable();
+    refreshSidebarStatus && refreshSidebarStatus();
+  }
 };
 
 async function loadDB(showRefreshToast) {
@@ -1317,6 +1369,20 @@ function _enterSettings() {
   window.scrollTo(0, 0);
 }
 
+function computeTotalTonnage() {
+  let total = 0;
+  Object.entries(projectState.qtys || {}).forEach(([param, qStr]) => {
+    const q = parseFloat(qStr) || 0;
+    if (q <= 0) return;
+    const node = MASTER_DB[param];
+    if (!node) return;
+    if (isStep1ManagedParam(param)) return;
+    const unit = String(node.__unit || 'MT').toLowerCase();
+    if (unit === 'mt') total += q;
+  });
+  return total;
+}
+
 function captureProjectDetails() {
   const heightVal = parseFloat(document.getElementById('projHeight').value) || 0;
   const erHeightBand = erectionHeightBand(heightVal);
@@ -1328,6 +1394,11 @@ function captureProjectDetails() {
   const distBand = getDistanceBand(); // null if no Distance in master DB or no match
   const paintSel = getPaintSelection(); // null if "None" picked or Paint missing
 
+  // Computed total tonnage = sum of qtys for MT-unit params
+  const computedTonnage = computeTotalTonnage();
+  const tonnageInput = document.getElementById('projTonnage');
+  if (tonnageInput) tonnageInput.value = fmtNum(computedTonnage, 2);
+
   projectState.details = {
     ref: document.getElementById('projRef').value || 'Met/est/2026/XX',
     date: document.getElementById('projDate').value,
@@ -1337,7 +1408,7 @@ function captureProjectDetails() {
     dist: parseFloat(document.getElementById('projDist').value) || 0,
     height: heightVal,
     area: parseFloat(document.getElementById('projArea').value) || 0,
-    tonnage: parseFloat(document.getElementById('projTonnage').value) || 0,
+    tonnage: computedTonnage,
     safety: document.getElementById('projSafety').value,
     design: document.getElementById('projDesign').value,
     margin: parseFloat(document.getElementById('projMargin').value) || 0,
@@ -1358,6 +1429,17 @@ function captureProjectDetails() {
 
 function fmtINR(n) { return "₹ " + (Math.round(n || 0)).toLocaleString('en-IN'); }
 function fmtNum(n, dp=2) { return (n || 0).toLocaleString('en-IN', {maximumFractionDigits: dp}); }
+
+// Filename builder: client_project_date with the same sanitisation rules as the server.
+function buildFileBase(d) {
+  const safe = s => String(s||'').replace(/[^a-z0-9]/gi, '_').replace(/_+/g,'_').replace(/^_|_$/g,'');
+  const parts = [];
+  const client = safe(d.client);
+  if (client && d.client !== '—') parts.push(client);
+  parts.push(safe(d.name) || 'Project');
+  parts.push(safe(d.date) || new Date().toISOString().slice(0,10));
+  return parts.join('_');
+}
 
 // =========================================================
 // SIDEBAR
@@ -1754,6 +1836,111 @@ function sync() {
   document.getElementById('paramTotalDisplay').innerText = fmtINR(paramTotal);
 
   refreshSidebarStatus();
+  scheduleAutosave();
+}
+
+// =========================================================
+// AUTOSAVE: persist projectState to localStorage so a refresh doesn't lose work.
+// Debounced so we don't write on every keystroke.
+// =========================================================
+const AUTOSAVE_KEY = 'metfraa.draftQuote.v4';
+let _autosaveTimer = null;
+function scheduleAutosave() {
+  if (_autosaveTimer) clearTimeout(_autosaveTimer);
+  _autosaveTimer = setTimeout(performAutosave, 600);
+}
+function performAutosave() {
+  try {
+    const snapshot = {
+      savedAt: new Date().toISOString(),
+      details: projectState.details,
+      qtys: projectState.qtys,
+      selections: projectState.selections,
+      siteSpecific: projectState.siteSpecific || {}
+    };
+    localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(snapshot));
+    const el = document.getElementById('autosaveStatus');
+    if (el) el.innerText = `Saved locally · ${new Date().toLocaleTimeString('en-IN', { hour:'2-digit', minute:'2-digit', second:'2-digit' })}`;
+  } catch (e) {
+    const el = document.getElementById('autosaveStatus');
+    if (el) el.innerHTML = `<span style="color:#dc3545">⚠ Local save failed: ${e.message}</span>`;
+  }
+}
+function manualLocalSave() {
+  if (_autosaveTimer) clearTimeout(_autosaveTimer);
+  performAutosave();
+  toast('💾 Saved locally', 'ok', 2000);
+}
+function restoreFromLocalSave() {
+  try {
+    const raw = localStorage.getItem(AUTOSAVE_KEY);
+    if (!raw) return false;
+    const snap = JSON.parse(raw);
+    if (!snap || !snap.qtys) return false;
+    projectState.qtys = snap.qtys || {};
+    projectState.selections = snap.selections || {};
+    projectState.siteSpecific = snap.siteSpecific || {};
+    if (snap.details) {
+      const d = snap.details;
+      const set = (id, v) => { const el = document.getElementById(id); if (el && v != null) el.value = v; };
+      set('projRef', d.ref); set('projDate', d.date); set('projName', d.name);
+      set('projClient', d.client); set('projLoc', d.loc); set('projDist', d.dist);
+      set('projHeight', d.height); set('projArea', d.area); set('projSafety', d.safety);
+      set('projDesign', d.design); set('projMargin', d.margin); set('projGST', d.gst);
+    }
+    return true;
+  } catch (e) {
+    console.warn('Could not restore local save:', e.message);
+    return false;
+  }
+}
+function clearLocalSave() {
+  try { localStorage.removeItem(AUTOSAVE_KEY); } catch (e) {}
+}
+
+// Push the entire quotation (PDF + JSON) to OneDrive — same as the existing
+// final save flow, but available as a button on Step 2 so you don't have to
+// reach the end to commit your work.
+async function saveCurrentToCloud() {
+  const d = projectState.details || {};
+  if (!d.name || d.name === 'Project' || d.name === '—') {
+    toast('Fill in Project Name on Step 1 before cloud-saving', 'err');
+    return;
+  }
+  const btn = document.getElementById('saveCloudBtn');
+  btn.disabled = true; btn.innerText = '☁ Saving...';
+  try {
+    captureProjectDetails();
+    injectVirtualParameters();
+    const doc = buildPDF();
+    const pdfBase64 = doc.output('datauristring').split(',')[1];
+    const jsonData = {
+      version: 4,
+      savedAt: new Date().toISOString(),
+      details: projectState.details,
+      qtys: projectState.qtys,
+      selections: projectState.selections,
+      siteSpecific: projectState.siteSpecific || {}
+    };
+    const res = await fetch(`${RENDER_URL}/api/save-quotation`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        projectName: projectState.details.name,
+        clientName: projectState.details.client,
+        date: projectState.details.date,
+        pdfBase64: pdfBase64,
+        jsonData: jsonData
+      })
+    });
+    const data = await res.json();
+    if (!data.success) throw new Error(data.error || 'Cloud save failed');
+    toast('☁ Saved to OneDrive', 'ok', 3000);
+  } catch (e) {
+    toast('❌ ' + e.message, 'err', 5000);
+  } finally {
+    btn.disabled = false; btn.innerHTML = '☁ Save to OneDrive';
+  }
 }
 
 // Compute an AUTO subcategory's rate from Step 1 selections.
@@ -2111,7 +2298,7 @@ function downloadExcel() {
   ws['!cols'] = [{wch:6},{wch:38},{wch:28},{wch:16},{wch:10},{wch:8},{wch:18}];
   ws['!merges'] = [{s:{r:0,c:0},e:{r:0,c:6}}];
   XLSX.utils.book_append_sheet(wb, ws, 'Quotation');
-  XLSX.writeFile(wb, `${(d.name||'Project').replace(/[^a-z0-9]/gi,'_')}_${d.date}.xlsx`);
+  XLSX.writeFile(wb, `${buildFileBase(d)}.xlsx`);
 }
 
 // =========================================================
@@ -2145,14 +2332,17 @@ function buildPDF() {
     }
   } catch(e) {}
 
-  // Centered title "COSTING ESTIMATION" + client name underneath
+  // Centered title "COSTING ESTIMATION" + client name (primary) + project name (smaller)
   doc.setTextColor(255, 255, 255);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(18);
-  doc.text('COSTING ESTIMATION', pageW / 2, 16, { align: 'center' });
+  doc.text('COSTING ESTIMATION', pageW / 2, 14, { align: 'center' });
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(13);
+  doc.text(d.client || '—', pageW / 2, 22, { align: 'center' });
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(11);
-  doc.text(d.client || '—', pageW / 2, 25, { align: 'center' });
+  doc.setFontSize(9);
+  doc.text(d.name || '—', pageW / 2, 28, { align: 'center' });
 
   // ----- PROJECT INFO STRIP (below header) -----
   let y = 42;
@@ -2378,7 +2568,7 @@ function buildPDF() {
 function downloadPDF() {
   const d = projectState.details;
   const doc = buildPDF();
-  doc.save(`${(d.name||'Project').replace(/[^a-z0-9]/gi,'_')}_${d.date}.pdf`);
+  doc.save(`${buildFileBase(d)}.pdf`);
 }
 
 // =========================================================
@@ -2416,6 +2606,7 @@ async function saveToOneDrive() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         projectName: d.name,
+        clientName: d.client,
         date: d.date,
         pdfBase64: pdfBase64,
         jsonData: jsonData
@@ -2485,6 +2676,12 @@ function renderRatesEditor() {
           ${actions}
         </div>`;
       });
+      // "+ Add Option" button for this subcategory
+      const subEscaped = sub.replace(/'/g,"\\'");
+      const pnameEscaped = pname.replace(/'/g,"\\'");
+      inner += `<div style="grid-column: 1 / -1; padding: 4px 0 8px; text-align:right; border-bottom:1px dashed #f0f0f0; margin-bottom:6px;">
+        <button class="btn btn-secondary" style="padding:3px 10px; font-size:11px;" onclick="openAddOptionModal('${pnameEscaped}','${subEscaped}')" title="Add option to ${sub}">+ Add Option to ${sub}</button>
+      </div>`;
     });
     // Per-parameter action bar: always show "+ Add Row"; Paint also gets "+ Add Paint Type" (legacy quick-add)
     const escapedName = pname.replace(/'/g, "\\'");
@@ -2668,6 +2865,70 @@ async function submitAddParameter() {
     toast('❌ ' + e.message, 'err', 5000);
   } finally {
     btn.disabled = false; btn.innerText = '💾 Create Parameter';
+  }
+}
+
+// =========================================================
+// QUICK ADD OPTION (Settings — per subcategory)
+// =========================================================
+let _addOptionContext = { paramName: null, subcategory: null, unit: 'MT' };
+
+function openAddOptionModal(paramName, subcategory) {
+  const node = MASTER_DB[paramName];
+  if (!node) { toast('Parameter not found', 'err'); return; }
+  _addOptionContext = { paramName, subcategory, unit: node.__unit || 'MT' };
+  document.getElementById('addOptionTitle').innerText = 'Add Option';
+  document.getElementById('addOptionSubtitle').innerHTML =
+    `Adding to <strong>${cleanParamLabel(paramName)}</strong> / <strong>${subcategory}</strong> (unit: ${_addOptionContext.unit})`;
+  document.getElementById('ao_name').value = '';
+  document.getElementById('ao_rate').value = 0;
+  document.getElementById('ao_type').value = 'RATE';
+  document.getElementById('ao_group').value = '';
+  document.getElementById('ao_remark').value = '';
+  document.getElementById('addOptionModal').classList.add('show');
+  setTimeout(() => document.getElementById('ao_name').focus(), 50);
+}
+
+function closeAddOptionModal() {
+  document.getElementById('addOptionModal').classList.remove('show');
+}
+
+async function submitAddOption() {
+  const name = document.getElementById('ao_name').value.trim();
+  const rate = parseFloat(document.getElementById('ao_rate').value) || 0;
+  const type = document.getElementById('ao_type').value;
+  const group = document.getElementById('ao_group').value.trim();
+  const remark = document.getElementById('ao_remark').value.trim();
+  if (!name) { toast('Option name required', 'err'); return; }
+  if (adminProtected && !adminPassword) { toast('Admin password required', 'err'); showPwModal(); return; }
+
+  const btn = document.getElementById('aoSubmitBtn');
+  btn.disabled = true; btn.innerText = 'Adding...';
+  try {
+    const headers = { 'Content-Type':'application/json' };
+    if (adminPassword) headers['x-admin-password'] = adminPassword;
+    const res = await fetch(`${RENDER_URL}/api/add-master-row`, {
+      method: 'POST', headers,
+      body: JSON.stringify({
+        paramName: _addOptionContext.paramName,
+        subcategory: _addOptionContext.subcategory,
+        optionName: name,
+        rate, type,
+        unit: _addOptionContext.unit,
+        group, remark
+      })
+    });
+    const data = await res.json();
+    if (res.status === 401) { adminPassword=''; toast('Session expired','err'); showPwModal(); return; }
+    if (!data.success) throw new Error(data.error || 'Failed');
+    toast(`✅ Added "${name}" to ${_addOptionContext.subcategory}`, 'ok', 3000);
+    closeAddOptionModal();
+    await loadDB(false);
+    renderRatesEditor();
+  } catch (e) {
+    toast('❌ ' + e.message, 'err', 5000);
+  } finally {
+    btn.disabled = false; btn.innerText = '💾 Add Option';
   }
 }
 
