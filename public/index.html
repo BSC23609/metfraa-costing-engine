@@ -729,9 +729,12 @@ function erectionHeightBand(heightM) {
 }
 
 function updateErectionHeightDisplay() {
-  const h = parseFloat(document.getElementById('projHeight').value) || 0;
+  const inp = document.getElementById('projHeight');
+  if (!inp) return;
+  const h = parseFloat(inp.value) || 0;
   const band = erectionHeightBand(h);
-  document.getElementById('erHeightDisplay').value = `${band.label} → ₹${band.rate.toLocaleString('en-IN')}/MT`;
+  const out = document.getElementById('erHeightDisplay');
+  if (out) out.value = `${band.label} → ₹${band.rate.toLocaleString('en-IN')}/MT`;
 }
 
 // Populate Erection Safety dropdown from master sheet param "20. ERECTION SAFETY".
@@ -864,6 +867,7 @@ function getDistanceBand() {
 function updateDistanceBandDisplay() {
   const band = getDistanceBand();
   const el = document.getElementById('distBandDisplay');
+  if (!el) return;
   if (!band) {
     el.value = findParamByName('distance')[1]
       ? 'No band matches this km — check Distance rows in master sheet'
@@ -878,6 +882,7 @@ function updateDistanceBandDisplay() {
 // =========================================================
 function populatePaintDropdown() {
   const sel = document.getElementById('paintSelect');
+  if (!sel) return;
   const [, node] = findParamByName('paint');
   const prevValue = sel.value;
   sel.innerHTML = '';
@@ -1255,7 +1260,8 @@ async function loadDB(showRefreshToast) {
     initSidebar();
     renderQtyTable();
     loadRecentQuotations();
-    document.getElementById('nextBtn').disabled = false;
+    const nextBtn = document.getElementById('nextBtn');
+    if (nextBtn) nextBtn.disabled = false;
 
     // If currently in Settings, re-render the rate editor
     if (document.getElementById('pageSettings').classList.contains('active')) renderRatesEditor();
@@ -1263,6 +1269,9 @@ async function loadDB(showRefreshToast) {
     setTimeout(() => banner.style.display = 'none', 3000);
     if (showRefreshToast) toast('✅ Master data refreshed', 'ok');
   } catch(e) {
+    // Full diagnostic logging so we can see WHERE the error actually originated
+    console.error('[loadDB] Caught error:', e);
+    console.error('[loadDB] Stack:', e.stack);
     banner.innerText = "❌ Offline: " + e.message + " — check Render server.";
     banner.style.background = "#f8d7da";
     banner.style.color = "#721c24";
@@ -1984,11 +1993,16 @@ function computeTotalTonnage() {
 }
 
 function captureProjectDetails() {
-  const heightVal = parseFloat(document.getElementById('projHeight').value) || 0;
+  // Helper: safely read a form input's value
+  const v = id => {
+    const el = document.getElementById(id);
+    return el ? el.value : '';
+  };
+  const heightVal = parseFloat(v('projHeight')) || 0;
   const erHeightBand = erectionHeightBand(heightVal);
   const erSafetySel = document.getElementById('erSafety');
-  const erSafetyRate = parseFloat(erSafetySel.value) || 0;
-  const erSafetyOpt = (erSafetySel.selectedIndex >= 0) ? erSafetySel.options[erSafetySel.selectedIndex] : null;
+  const erSafetyRate = erSafetySel ? (parseFloat(erSafetySel.value) || 0) : 0;
+  const erSafetyOpt = (erSafetySel && erSafetySel.selectedIndex >= 0) ? erSafetySel.options[erSafetySel.selectedIndex] : null;
   const erSafetyLabel = erSafetyOpt ? erSafetyOpt.text : '—';
 
   const distBand = getDistanceBand(); // null if no Distance in master DB or no match
@@ -2000,19 +2014,19 @@ function captureProjectDetails() {
   if (tonnageInput) tonnageInput.value = fmtNum(computedTonnage, 2);
 
   projectState.details = {
-    ref: document.getElementById('projRef').value || 'Met/est/2026/XX',
-    date: document.getElementById('projDate').value,
-    name: document.getElementById('projName').value || 'Project',
-    client: document.getElementById('projClient').value || '—',
-    loc: document.getElementById('projLoc').value || '—',
-    dist: parseFloat(document.getElementById('projDist').value) || 0,
+    ref: v('projRef') || 'Met/est/2026/XX',
+    date: v('projDate'),
+    name: v('projName') || 'Project',
+    client: v('projClient') || '—',
+    loc: v('projLoc') || '—',
+    dist: parseFloat(v('projDist')) || 0,
     height: heightVal,
-    area: parseFloat(document.getElementById('projArea').value) || 0,
+    area: parseFloat(v('projArea')) || 0,
     tonnage: computedTonnage,
-    safety: document.getElementById('projSafety').value,
-    design: document.getElementById('projDesign').value,
-    margin: parseFloat(document.getElementById('projMargin').value) || 0,
-    gst: parseFloat(document.getElementById('projGST').value) || 0,
+    safety: v('projSafety'),
+    design: v('projDesign'),
+    margin: parseFloat(v('projMargin')) || 0,
+    gst: parseFloat(v('projGST')) || 0,
     // Project-wide auto-charges (all per MT × tonnage)
     distBandId: distBand ? distBand.id : null,
     distBandName: distBand ? distBand.name : null,
@@ -2153,18 +2167,28 @@ function loadWorkspace(name, el) {
   activeP = name;
   document.querySelectorAll('.param-item').forEach(i => i.classList.remove('active'));
   if (el) el.classList.add('active');
+  if (!MASTER_DB[name]) {
+    console.warn('[loadWorkspace] Param not found in MASTER_DB:', name);
+    return;
+  }
   const unit = MASTER_DB[name].__unit || 'MT';
 
   const titleEl = document.getElementById('activeTitle');
-  titleEl.innerHTML = `${cleanParamLabel(name)} <button class="btn btn-primary" style="float:right; padding:6px 12px; font-size:11px;" onclick="showAddRowModal()">+ Add Row</button>`;
-  document.getElementById('activeUnitInfo').innerText = `Unit: ${unit}`;
+  if (titleEl) titleEl.innerHTML = `${cleanParamLabel(name)} <button class="btn btn-primary" style="float:right; padding:6px 12px; font-size:11px;" onclick="showAddRowModal()">+ Add Row</button>`;
+  const unitInfoEl = document.getElementById('activeUnitInfo');
+  if (unitInfoEl) unitInfoEl.innerText = `Unit: ${unit}`;
 
-  document.getElementById('paramHelp').innerHTML = `<strong>How it works:</strong> Pick an option for each subcategory. RM COST can have multiple raw materials (use <strong>+ Add RM</strong>). Rates are not shown — only the parameter total at the bottom reflects all selections.`;
+  const paramHelpEl = document.getElementById('paramHelp');
+  if (paramHelpEl) paramHelpEl.innerHTML = `<strong>How it works:</strong> Pick an option for each subcategory. RM COST can have multiple raw materials (use <strong>+ Add RM</strong>). Rates are not shown — only the parameter total at the bottom reflects all selections.`;
 
   // Update nav button state (B2)
   updateParamNavButtons();
 
   const body = document.getElementById('builderBody');
+  if (!body) {
+    console.warn('[loadWorkspace] builderBody element missing — page2 not rendered yet?');
+    return;
+  }
   body.innerHTML = '';
 
   // ---- Parameter quantity row (3-col: label spans 2, qty input in 3rd col? no — keep qty on this row visible) ----
