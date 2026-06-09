@@ -483,9 +483,14 @@ body { font-family: 'Segoe UI', Tahoma, sans-serif; background: var(--brand-grey
             <option value="">— loading —</option>
           </select>
         </div>
+        <div class="form-field"><label class="form-label">Fixed Charges (Conversion) <span style="color:#999;font-size:10px;">(applies to params with Conversion subcat)</span></label>
+          <select id="projConversionCharge" class="form-select">
+            <option value="">— loading —</option>
+          </select>
+        </div>
       </div>
       <div style="font-size:11px; color:#6c757d; margin-top:8px;">
-        ℹ Paint, Distance Band, Erection Safety, Erection Height are charged <strong>per MT × Steel Tonnage</strong> at project level. Shot Blast and Fixed Charges (Design) apply the selected option to every parameter that has those subcategories. All editable from <strong>⚙ Settings</strong>.
+        ℹ Paint, Distance Band, Erection Safety, Erection Height are charged <strong>per MT × Steel Tonnage</strong> at project level. Shot Blast, Fixed Charges (Design), Fixed Charges (Conversion) apply the selected option to every parameter that has those subcategories. All editable from <strong>⚙ Settings</strong>.
       </div>
 
       <div class="section-title" style="margin-top:24px;">Per-Parameter Quantities</div>
@@ -1065,6 +1070,35 @@ function getProjDesignChargeSelection() {
   };
 }
 
+function populateConversionChargeDropdown() {
+  const sel = document.getElementById('projConversionCharge');
+  if (!sel) return;
+  const prev = sel.value;
+  const opts = collectGlobalSubcatOptions('FIXED CHARGES (CONVERSION)');
+  sel.innerHTML = '<option value="">— None —</option>';
+  opts.forEach(o => {
+    const el = document.createElement('option');
+    el.value = `${o.canonicalName}|${o.rate}`;
+    el.dataset.rate = o.rate || 0;
+    el.dataset.name = o.name || '';
+    el.dataset.canonicalName = o.canonicalName;
+    el.textContent = `${o.name} (${o.rate ? '₹' + (o.rate).toLocaleString('en-IN') : '₹0'})`;
+    sel.appendChild(el);
+  });
+  if (prev && [...sel.options].some(o => o.value === prev)) sel.value = prev;
+}
+
+function getProjConversionChargeSelection() {
+  const sel = document.getElementById('projConversionCharge');
+  if (!sel || !sel.value) return null;
+  const opt = sel.options[sel.selectedIndex];
+  return {
+    canonicalName: opt.dataset.canonicalName,
+    name: opt.dataset.name,
+    rate: parseFloat(opt.dataset.rate) || 0
+  };
+}
+
 // =========================================================
 // PER-PARAMETER QUANTITY TABLE (Step 1)
 // One editable qty per parameter. Blank by default.
@@ -1439,6 +1473,7 @@ async function loadDB(showRefreshToast) {
     populateErectionSafetyDropdown();
     populateShotBlastDropdown();
     populateDesignChargeDropdown();
+    populateConversionChargeDropdown();
     updateDistanceBandDisplay();
     updateErectionHeightDisplay();
     initSidebar();
@@ -1556,6 +1591,13 @@ function _applySavedQuotation(saved) {
     if (dc) {
       const match = [...dc.options].find(o => o.dataset.name && d.projDesignChargeName && o.dataset.name === d.projDesignChargeName);
       if (match) dc.value = match.value;
+    }
+  }
+  if (d.projConversionChargeCanonical) {
+    const cv = document.getElementById('projConversionCharge');
+    if (cv) {
+      const targetVal = `${d.projConversionChargeCanonical}|${d.projConversionChargeRate || 0}`;
+      if ([...cv.options].some(o => o.value === targetVal)) cv.value = targetVal;
     }
   }
 
@@ -2381,6 +2423,7 @@ function captureProjectDetails() {
   const paintSel = getPaintSelection(); // null if "None" picked or Paint missing
   const shotBlastSel = getProjShotBlastSelection();
   const designChargeSel = getProjDesignChargeSelection();
+  const conversionChargeSel = getProjConversionChargeSelection();
 
   // Computed total tonnage = sum of qtys for MT-unit params
   const computedTonnage = computeTotalTonnage();
@@ -2417,7 +2460,10 @@ function captureProjectDetails() {
     projShotBlastRate: shotBlastSel ? shotBlastSel.rate : 0,
     projDesignChargeCanonical: designChargeSel ? designChargeSel.canonicalName : null,
     projDesignChargeName: designChargeSel ? designChargeSel.name : null,
-    projDesignChargeRate: designChargeSel ? designChargeSel.rate : 0
+    projDesignChargeRate: designChargeSel ? designChargeSel.rate : 0,
+    projConversionChargeCanonical: conversionChargeSel ? conversionChargeSel.canonicalName : null,
+    projConversionChargeName: conversionChargeSel ? conversionChargeSel.name : null,
+    projConversionChargeRate: conversionChargeSel ? conversionChargeSel.rate : 0
   };
 }
 
@@ -2596,7 +2642,7 @@ function loadWorkspace(name, el) {
 
     // Shot Blast and Fixed Charges (Design) are now project-wide. Render them as
     // read-only AUTO-style rows so the user can see what got applied from Step 1.
-    if (subcatMatches(sub, 'SHOT BLAST') || subcatMatches(sub, 'FIXED CHARGES (DESIGN)')) {
+    if (subcatMatches(sub, 'SHOT BLAST') || subcatMatches(sub, 'FIXED CHARGES (DESIGN)') || subcatMatches(sub, 'FIXED CHARGES (CONVERSION)')) {
       // Look up what was applied for this param (set by injectVirtualParameters)
       const applied = (projectState.selections[name] || {})[sub];
       const appliedLabel = applied ? `${applied.name}` : '(none selected — pick on Step 1)';
@@ -2987,6 +3033,13 @@ function restoreFromLocalSave() {
           if ([...dc.options].some(o => o.value === targetVal)) dc.value = targetVal;
         }
       }
+      if (d.projConversionChargeCanonical) {
+        const cv = document.getElementById('projConversionCharge');
+        if (cv) {
+          const targetVal = `${d.projConversionChargeCanonical}|${d.projConversionChargeRate || 0}`;
+          if ([...cv.options].some(o => o.value === targetVal)) cv.value = targetVal;
+        }
+      }
     }
     return true;
   } catch (e) {
@@ -3020,7 +3073,7 @@ async function startNewQuote() {
   const ids = ['projRef','projDate','projName','projClient','projLoc','projDist','projHeight','projArea','projMargin','projGST'];
   ids.forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
   // Reset project-wide dropdowns to "None"
-  ['projShotBlast', 'projDesignCharge', 'paintSelect', 'erSafety'].forEach(id => {
+  ['projShotBlast', 'projDesignCharge', 'projConversionCharge', 'paintSelect', 'erSafety'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.selectedIndex = 0;
   });
@@ -3250,6 +3303,21 @@ function injectVirtualParameters() {
       if (subcatMatches(sub, 'FIXED CHARGES (DESIGN)') && d.projDesignChargeCanonical) {
         const targetCanon = d.projDesignChargeCanonical;
         const targetRate = d.projDesignChargeRate || 0;
+        const normName = s => String(s || '').trim().toUpperCase().replace(/\s+/g, ' ');
+        const opt = opts.find(o => normName(o.name) === targetCanon && (o.rate || 0) === targetRate);
+        if (opt) {
+          const r = opt.rate || 0;
+          const perUnit = opt.type === 'PERCENT' ? rmUnitCostForPct * (r/100) : r;
+          out[sub] = { id: opt.id, name: opt.name, group: opt.group||'', rate: r, type: opt.type,
+                       perUnit, qty: paramQty, line: perUnit*paramQty, remark: '', isProjectOverride: true };
+          return;
+        }
+      }
+
+      // Project-wide override #3: Fixed Charges (Conversion)
+      if (subcatMatches(sub, 'FIXED CHARGES (CONVERSION)') && d.projConversionChargeCanonical) {
+        const targetCanon = d.projConversionChargeCanonical;
+        const targetRate = d.projConversionChargeRate || 0;
         const normName = s => String(s || '').trim().toUpperCase().replace(/\s+/g, ' ');
         const opt = opts.find(o => normName(o.name) === targetCanon && (o.rate || 0) === targetRate);
         if (opt) {
