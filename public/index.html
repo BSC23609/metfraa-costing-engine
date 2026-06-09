@@ -2464,8 +2464,7 @@ function sync() {
       // keep remark even if no option chosen yet
       selStore[sub] = { id:'', remark };
     }
-    row.querySelector('.r-v').innerText = rateLabel;
-    row.querySelector('.l-v').innerText = lineLabel;
+    // .r-v / .l-v cells were removed in the rate-hiding redesign — no DOM writes needed
   });
 
   // ---- 3. AUTO subcategories (Transport / Finishing / Erection from Step 1) ----
@@ -2475,9 +2474,9 @@ function sync() {
     const lineTotal = auto.rate * paramQty;
     unitRateTotal += auto.rate;
     paramTotal += lineTotal;
-    row.querySelector('.auto-name').innerText = auto.label;
-    row.querySelector('.auto-rate').innerText = auto.rate > 0 ? fmtINR(auto.rate) : '—';
-    row.querySelector('.auto-line').innerText = auto.rate > 0 ? fmtINR(lineTotal) : '—';
+    const autoNameCell = row.querySelector('.auto-name');
+    if (autoNameCell) autoNameCell.innerText = auto.label;
+    // .auto-rate / .auto-line cells were removed in the rate-hiding redesign
     selStore[sub] = {
       id: auto.id || 'AUTO', name: auto.label, rate: auto.rate, type: 'RATE',
       perUnit: auto.rate, qty: paramQty, line: lineTotal, isAuto: true
@@ -2498,7 +2497,10 @@ function sync() {
       rate: entry.rate, type: entry.type, perUnit, qty: paramQty, line: lineTotal, isSiteSpecific:true
     };
     const rowEl = ssRowsEl[idx];
-    if (rowEl) rowEl.querySelector('.ss-line').innerText = fmtINR(lineTotal);
+    if (rowEl) {
+      const ssLine = rowEl.querySelector('.ss-line');
+      if (ssLine) ssLine.innerText = fmtINR(lineTotal); // legacy — cell removed in rate-hiding redesign
+    }
   });
 
   projectState.selections[activeP] = selStore;
