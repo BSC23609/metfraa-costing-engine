@@ -2594,9 +2594,21 @@ function loadWorkspace(name, el) {
     const isRM = subKey === 'RM COST';
     const isAuto = isAutoSubcat(opts);
 
-    // Skip Shot Blast and Fixed Charges (Design) — these are now picked once at
-    // project level (Step 1) and auto-applied via injectVirtualParameters.
+    // Shot Blast and Fixed Charges (Design) are now project-wide. Render them as
+    // read-only AUTO-style rows so the user can see what got applied from Step 1.
     if (subcatMatches(sub, 'SHOT BLAST') || subcatMatches(sub, 'FIXED CHARGES (DESIGN)')) {
+      // Look up what was applied for this param (set by injectVirtualParameters)
+      const applied = (projectState.selections[name] || {})[sub];
+      const appliedLabel = applied ? `${applied.name}` : '(none selected — pick on Step 1)';
+      const row = document.createElement('tr');
+      row.dataset.projwide = sub;
+      row.style.background = '#fff8e1';
+      row.innerHTML = `
+        <td>${sub} <span class="tag-rate" style="background:#ffe69c;color:#664d03;">PROJECT</span></td>
+        <td class="projwide-name" style="font-style:italic; color:#555;">${appliedLabel} <span style="color:#999; font-size:10px;">(auto-generated from Step 1)</span></td>
+        <td></td>
+      `;
+      body.appendChild(row);
       return;
     }
 
