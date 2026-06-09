@@ -157,6 +157,31 @@ body { font-family: 'Segoe UI', Tahoma, sans-serif; background: var(--brand-grey
   </div>
 </div>
 
+<!-- Browse Saved Quotations modal -->
+<div id="browseModal" class="modal-bg">
+  <div class="modal" style="min-width:720px; max-width:920px; width:90vw;">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+      <h3 style="margin:0;">📂 Browse Saved Quotations</h3>
+      <button class="btn btn-secondary" onclick="closeBrowseModal()" style="font-size:14px; padding:4px 12px;">✕</button>
+    </div>
+    <div style="background:#f6f8fa; border:1px solid #e2e6eb; padding:12px 14px; border-radius:6px; margin-bottom:14px;">
+      <label class="form-label" style="font-size:11px; color:#666;">Search by Quotation Ref or Project Name</label>
+      <div style="display:flex; gap:8px;">
+        <input type="text" id="loadRef" class="form-input" style="flex:1;" placeholder="e.g. Met/est/06/2026/01 or Bliss Solution" onkeydown="if(event.key==='Enter') loadQuotation()">
+        <button class="btn btn-primary" onclick="loadQuotation()" style="padding:8px 16px;">Search & Load</button>
+      </div>
+      <div style="font-size:11px; color:#888; margin-top:4px;">Loads the most recent matching quotation and fills all fields.</div>
+    </div>
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+      <strong style="color:var(--brand-primary); font-size:14px;">Recent Quotations</strong>
+      <button onclick="loadRecentQuotations()" style="padding:4px 12px; font-size:11px; background:transparent; border:1px solid var(--brand-primary); color:var(--brand-primary); border-radius:4px; cursor:pointer;">⟳ Refresh</button>
+    </div>
+    <div id="recentList" style="font-size:13px; max-height:50vh; overflow-y:auto;">
+      <em style="color:#aaa;">Loading…</em>
+    </div>
+  </div>
+</div>
+
 <!-- Add Row modal (+ button in Step 2) -->
 <div id="addRowModal" class="modal-bg">
   <div class="modal" style="min-width:380px;">
@@ -405,31 +430,19 @@ body { font-family: 'Segoe UI', Tahoma, sans-serif; background: var(--brand-grey
   <!-- PAGE 1 -->
   <div id="page1" class="page active">
 
-    <div class="load-panel">
-      <span class="load-label">📂 Load Existing Quotation:</span>
-      <input type="text" id="loadRef" placeholder="Enter Quotation Ref or Project Name (e.g. Met/est/06/2026/01)">
-      <button onclick="loadQuotation()">Load</button>
-      <div class="hint">Loads the most recent saved quotation matching this reference. All fields will be auto-filled.</div>
-    </div>
-
     <div class="card">
       <div class="section-title" style="display:flex; justify-content:space-between; align-items:center;">
         <span>Project Identification</span>
-        <button class="btn btn-secondary" onclick="startNewQuote()" style="font-size:12px; padding:6px 14px;" title="Clear everything and start a fresh quote">📄 New Quote</button>
+        <div style="display:flex; gap:8px;">
+          <button class="btn btn-secondary" onclick="openBrowseModal()" style="font-size:12px; padding:6px 14px;" title="Search saved quotations or load from recent">📂 Browse Saved Quotations</button>
+          <button class="btn btn-secondary" onclick="startNewQuote()" style="font-size:12px; padding:6px 14px;" title="Clear everything and start a fresh quote">📄 New Quote</button>
+        </div>
       </div>
       <div class="form-grid">
-        <div class="form-field"><label class="form-label">Quotation Ref</label><input type="text" id="projRef" class="form-input" placeholder="Met/est/06/2026/01"></div>
+        <div class="form-field"><label class="form-label">Quotation Ref <span style="color:#999; font-size:10px;">(auto-generated)</span></label><input type="text" id="projRef" class="form-input" placeholder="Met/est/06/2026/XX" readonly style="background:#f5f5f5; color:#444; font-family:monospace; font-weight:600;"></div>
         <div class="form-field"><label class="form-label">Date</label><input type="date" id="projDate" class="form-input"></div>
         <div class="form-field"><label class="form-label">Project Name</label><input type="text" id="projName" class="form-input" placeholder="e.g. Gymnasium Indoor Shed"></div>
         <div class="form-field"><label class="form-label">Client Name</label><input type="text" id="projClient" class="form-input"></div>
-      </div>
-
-      <div class="section-title" style="margin-top:24px; display:flex; justify-content:space-between; align-items:center;">
-        <span>Recent Quotations</span>
-        <button onclick="loadRecentQuotations()" style="padding:4px 12px; font-size:11px; background:transparent; border:1px solid var(--brand-primary); color:var(--brand-primary); border-radius:4px; cursor:pointer;">⟳ Refresh</button>
-      </div>
-      <div id="recentList" style="font-size:13px;">
-        <em style="color:#aaa;">Loading…</em>
       </div>
 
       <div class="section-title" style="margin-top:24px;">Site & Technical Specs</div>
@@ -439,8 +452,7 @@ body { font-family: 'Segoe UI', Tahoma, sans-serif; background: var(--brand-grey
         <div class="form-field"><label class="form-label">Building Height (m)</label><input type="number" id="projHeight" class="form-input" value="8" step="0.1"></div>
         <div class="form-field"><label class="form-label">Total Area (sqm)</label><input type="number" id="projArea" class="form-input" value="0"></div>
         <div class="form-field"><label class="form-label">Steel Tonnage (MT) <span style="color:#999;font-size:10px;">(auto: sum of MT param qtys)</span></label><input type="text" id="projTonnage" class="form-input" value="0" readonly style="background:#f5f5f5;color:#555;font-weight:600;"></div>
-        <div class="form-field"><label class="form-label">Safety Standard</label><select id="projSafety" class="form-select"><option>Average</option><option>Above Average</option><option>High</option></select></div>
-        <div class="form-field"><label class="form-label">Design Included</label><select id="projDesign" class="form-select"><option>Yes</option><option>No</option></select></div>
+        <!-- Safety Standard field removed (no longer used) -->
       </div>
 
       <div class="section-title" style="margin-top:24px;">Project-wide Charges (App-side calculation)</div>
@@ -461,9 +473,19 @@ body { font-family: 'Segoe UI', Tahoma, sans-serif; background: var(--brand-grey
         <div class="form-field"><label class="form-label">Erection Height Surcharge (auto from height)</label>
           <input type="text" id="erHeightDisplay" class="form-input" readonly style="background:#f0f0f0; cursor:not-allowed;" value="—">
         </div>
+        <div class="form-field"><label class="form-label">Shot Blast <span style="color:#999;font-size:10px;">(applies to params with Shot Blast subcat)</span></label>
+          <select id="projShotBlast" class="form-select">
+            <option value="">— loading —</option>
+          </select>
+        </div>
+        <div class="form-field"><label class="form-label">Fixed Charges (Design) <span style="color:#999;font-size:10px;">(applies to params with Design subcat)</span></label>
+          <select id="projDesignCharge" class="form-select">
+            <option value="">— loading —</option>
+          </select>
+        </div>
       </div>
       <div style="font-size:11px; color:#6c757d; margin-top:8px;">
-        ℹ All four are charged <strong>per MT × Steel Tonnage</strong> and apply to the whole project. Paint and Distance rates are editable from <strong>⚙ Settings</strong>.
+        ℹ Paint, Distance Band, Erection Safety, Erection Height are charged <strong>per MT × Steel Tonnage</strong> at project level. Shot Blast and Fixed Charges (Design) apply the selected option to every parameter that has those subcategories. All editable from <strong>⚙ Settings</strong>.
       </div>
 
       <div class="section-title" style="margin-top:24px;">Per-Parameter Quantities</div>
@@ -765,14 +787,19 @@ function populateErectionSafetyDropdown() {
     opts = HARDCODED_SAFETY_OPTIONS;
   }
 
-  opts.forEach(o => {
+  // Standardise display labels to Basic / Intermediate / Severe (sorted by ascending rate).
+  // The underlying rate values are preserved so the cost calculation is unchanged;
+  // only the user-facing label is renamed.
+  const sortedByRate = [...opts].sort((a, b) => a.rate - b.rate);
+  const standardLabels = ['Basic', 'Intermediate', 'Severe'];
+  sortedByRate.forEach((o, i) => {
+    const label = i < standardLabels.length ? standardLabels[i] : (o.label || `Tier ${i+1}`);
     const optEl = document.createElement('option');
     optEl.value = String(o.rate);
-    optEl.textContent = `${o.label} (₹${o.rate.toLocaleString('en-IN')}/MT)`;
+    optEl.textContent = `${label} (₹${o.rate.toLocaleString('en-IN')}/MT)`;
     sel.appendChild(optEl);
   });
 
-  // Restore previous selection if it still matches a value
   if (prevValue && [...sel.options].some(o => o.value === prevValue)) {
     sel.value = prevValue;
   }
@@ -915,6 +942,85 @@ function getPaintSelection() {
 }
 
 // =========================================================
+// PROJECT-WIDE SHOT BLAST + FIXED CHARGES (DESIGN)
+// These subcategories exist within many params. The user picks ONE option in
+// Step 1, and that selection is auto-applied to every param that has the
+// subcategory (in injectVirtualParameters).
+// =========================================================
+
+// Match a subcategory name loosely: returns true if `subName` matches `target`
+// after normalising (upper-case, removing spaces, parens, slashes).
+function subcatMatches(subName, target) {
+  const norm = s => String(s || '').toUpperCase().replace(/[\s()/]/g, '');
+  return norm(subName).includes(norm(target));
+}
+
+// Returns all unique options found in any param's <subcatTarget> subcategory.
+// Dedup by option id (so the same screw option doesn't appear 12 times).
+function collectGlobalSubcatOptions(subcatTarget) {
+  const seen = new Map(); // id → option
+  Object.entries(MASTER_DB).forEach(([pName, node]) => {
+    if (!node || node.__virtual || !node.subs) return;
+    Object.keys(node.subs).forEach(subKey => {
+      if (subcatMatches(subKey, subcatTarget)) {
+        (node.subs[subKey] || []).forEach(o => {
+          if (o && o.id && !seen.has(o.id)) seen.set(o.id, o);
+        });
+      }
+    });
+  });
+  return Array.from(seen.values());
+}
+
+function populateShotBlastDropdown() {
+  const sel = document.getElementById('projShotBlast');
+  if (!sel) return;
+  const prev = sel.value;
+  const opts = collectGlobalSubcatOptions('SHOT BLAST');
+  sel.innerHTML = '<option value="">— None —</option>';
+  opts.forEach(o => {
+    const el = document.createElement('option');
+    el.value = o.id;
+    el.dataset.rate = o.rate || 0;
+    el.dataset.name = o.name || '';
+    el.textContent = `${o.name} (${o.rate ? '₹' + (o.rate).toLocaleString('en-IN') : '₹0'})`;
+    sel.appendChild(el);
+  });
+  if (prev && [...sel.options].some(o => o.value === prev)) sel.value = prev;
+}
+
+function populateDesignChargeDropdown() {
+  const sel = document.getElementById('projDesignCharge');
+  if (!sel) return;
+  const prev = sel.value;
+  const opts = collectGlobalSubcatOptions('FIXED CHARGES (DESIGN)');
+  sel.innerHTML = '<option value="">— None —</option>';
+  opts.forEach(o => {
+    const el = document.createElement('option');
+    el.value = o.id;
+    el.dataset.rate = o.rate || 0;
+    el.dataset.name = o.name || '';
+    el.textContent = `${o.name} (${o.rate ? '₹' + (o.rate).toLocaleString('en-IN') : '₹0'})`;
+    sel.appendChild(el);
+  });
+  if (prev && [...sel.options].some(o => o.value === prev)) sel.value = prev;
+}
+
+function getProjShotBlastSelection() {
+  const sel = document.getElementById('projShotBlast');
+  if (!sel || !sel.value) return null;
+  const opt = sel.options[sel.selectedIndex];
+  return { id: sel.value, name: opt.dataset.name, rate: parseFloat(opt.dataset.rate) || 0 };
+}
+
+function getProjDesignChargeSelection() {
+  const sel = document.getElementById('projDesignCharge');
+  if (!sel || !sel.value) return null;
+  const opt = sel.options[sel.selectedIndex];
+  return { id: sel.value, name: opt.dataset.name, rate: parseFloat(opt.dataset.rate) || 0 };
+}
+
+// =========================================================
 // PER-PARAMETER QUANTITY TABLE (Step 1)
 // One editable qty per parameter. Blank by default.
 // Skip Distance/Paint variants (handled separately).
@@ -1028,6 +1134,21 @@ function showPwModal() {
 function closePw() {
   document.getElementById('pwModal').classList.remove('show');
   document.getElementById('pwInput').value = '';
+}
+
+// Browse modal helpers
+function openBrowseModal() {
+  const m = document.getElementById('browseModal');
+  if (m) {
+    m.classList.add('show');
+    // Refresh the recent list each time the modal opens (cheap)
+    loadRecentQuotations();
+    setTimeout(() => { const i = document.getElementById('loadRef'); if (i) i.focus(); }, 50);
+  }
+}
+function closeBrowseModal() {
+  const m = document.getElementById('browseModal');
+  if (m) m.classList.remove('show');
 }
 async function submitPw() {
   const pw = document.getElementById('pwInput').value;
@@ -1269,6 +1390,8 @@ async function loadDB(showRefreshToast) {
 
     populatePaintDropdown();
     populateErectionSafetyDropdown();
+    populateShotBlastDropdown();
+    populateDesignChargeDropdown();
     updateDistanceBandDisplay();
     updateErectionHeightDisplay();
     initSidebar();
@@ -1331,6 +1454,7 @@ async function loadQuotation() {
     if (!saved || !saved.details) throw new Error('Saved file is missing data.');
 
     _applySavedQuotation(saved);
+    closeBrowseModal();
 
     let extra = '';
     if (data.otherMatches && data.otherMatches.length > 0) {
@@ -1354,10 +1478,19 @@ function _applySavedQuotation(saved) {
   document.getElementById('projHeight').value = d.height || 0;
   document.getElementById('projArea').value = d.area || 0;
   document.getElementById('projTonnage').value = d.tonnage || 0;
-  document.getElementById('projSafety').value = d.safety || 'Average';
-  document.getElementById('projDesign').value = d.design || 'Yes';
+  // projSafety + projDesign fields removed
   document.getElementById('projMargin').value = d.margin || 12;
   document.getElementById('projGST').value = d.gst || 18;
+
+  // Restore project-wide subcategory selections
+  if (d.projShotBlastId) {
+    const sb = document.getElementById('projShotBlast');
+    if (sb && [...sb.options].some(o => o.value === d.projShotBlastId)) sb.value = d.projShotBlastId;
+  }
+  if (d.projDesignChargeId) {
+    const dc = document.getElementById('projDesignCharge');
+    if (dc && [...dc.options].some(o => o.value === d.projDesignChargeId)) dc.value = d.projDesignChargeId;
+  }
 
   if (d.erSafetyRate !== undefined) {
     document.getElementById('erSafety').value = String(d.erSafetyRate);
@@ -1494,6 +1627,7 @@ function _showQuotationPreview(saved, qmeta) {
   document.getElementById('qpEditBtn').onclick = () => {
     _applySavedQuotation(saved);
     closeQuotationPreview();
+    closeBrowseModal();
     window.scrollTo({ top: 0, behavior: 'smooth' });
     toast(`✅ Loaded "${qmeta.name}" — edit and save again to update`, 'ok', 4000);
   };
@@ -1918,12 +2052,12 @@ function buildCustomerQuotePDF() {
     styles: { fontSize: 9, cellPadding: 2.5, font: 'helvetica', overflow: 'linebreak', valign: 'top' },
     headStyles: { fillColor: [0, 43, 95], textColor: 255, fontStyle: 'bold' },
     columnStyles: {
-      0: { cellWidth: 12, halign: 'center' },
-      1: { cellWidth: 86 },
-      2: { cellWidth: 14, halign: 'center' },
-      3: { cellWidth: 18, halign: 'right' },
-      4: { cellWidth: 26, halign: 'right' },
-      5: { cellWidth: 'auto', halign: 'right' }
+      0: { cellWidth: 12, halign: 'center' },                 // S No
+      1: { cellWidth: 78 },                                   // Description (shrunk a bit)
+      2: { cellWidth: 14, halign: 'center' },                 // UOM
+      3: { cellWidth: 14, halign: 'center' },                 // Qty — narrow, centered (max 6 chars: "2,365")
+      4: { cellWidth: 26, halign: 'right' },                  // Rate
+      5: { cellWidth: 36, halign: 'right' }                   // Value — widened so "Rs 2,01,21,188" fits one line
     },
     rowPageBreak: 'avoid',
     margin: { top: 42, left: 14, right: 14, bottom: 18 },
@@ -2113,6 +2247,8 @@ function captureProjectDetails() {
 
   const distBand = getDistanceBand(); // null if no Distance in master DB or no match
   const paintSel = getPaintSelection(); // null if "None" picked or Paint missing
+  const shotBlastSel = getProjShotBlastSelection();
+  const designChargeSel = getProjDesignChargeSelection();
 
   // Computed total tonnage = sum of qtys for MT-unit params
   const computedTonnage = computeTotalTonnage();
@@ -2129,8 +2265,6 @@ function captureProjectDetails() {
     height: heightVal,
     area: parseFloat(v('projArea')) || 0,
     tonnage: computedTonnage,
-    safety: v('projSafety'),
-    design: v('projDesign'),
     margin: parseFloat(v('projMargin')) || 0,
     gst: parseFloat(v('projGST')) || 0,
     // Project-wide auto-charges (all per MT × tonnage)
@@ -2143,7 +2277,14 @@ function captureProjectDetails() {
     erSafetyLabel,
     erSafetyRate,
     erHeightLabel: erHeightBand.label,
-    erHeightRate: erHeightBand.rate
+    erHeightRate: erHeightBand.rate,
+    // Project-wide subcategory selections (auto-applied per param in injectVirtualParameters)
+    projShotBlastId: shotBlastSel ? shotBlastSel.id : null,
+    projShotBlastName: shotBlastSel ? shotBlastSel.name : null,
+    projShotBlastRate: shotBlastSel ? shotBlastSel.rate : 0,
+    projDesignChargeId: designChargeSel ? designChargeSel.id : null,
+    projDesignChargeName: designChargeSel ? designChargeSel.name : null,
+    projDesignChargeRate: designChargeSel ? designChargeSel.rate : 0
   };
 }
 
@@ -2319,6 +2460,12 @@ function loadWorkspace(name, el) {
     const subKey = sub.toUpperCase().trim();
     const isRM = subKey === 'RM COST';
     const isAuto = isAutoSubcat(opts);
+
+    // Skip Shot Blast and Fixed Charges (Design) — these are now picked once at
+    // project level (Step 1) and auto-applied via injectVirtualParameters.
+    if (subcatMatches(sub, 'SHOT BLAST') || subcatMatches(sub, 'FIXED CHARGES (DESIGN)')) {
+      return;
+    }
 
     if (isAuto) {
       // AUTO row — read-only marker, rate hidden (computed in sync but not shown)
@@ -2678,8 +2825,17 @@ function restoreFromLocalSave() {
       const set = (id, v) => { const el = document.getElementById(id); if (el && v != null) el.value = v; };
       set('projRef', d.ref); set('projDate', d.date); set('projName', d.name);
       set('projClient', d.client); set('projLoc', d.loc); set('projDist', d.dist);
-      set('projHeight', d.height); set('projArea', d.area); set('projSafety', d.safety);
-      set('projDesign', d.design); set('projMargin', d.margin); set('projGST', d.gst);
+      set('projHeight', d.height); set('projArea', d.area);
+      set('projMargin', d.margin); set('projGST', d.gst);
+      // Project-wide subcat selections (Shot Blast, Fixed Charges Design)
+      if (d.projShotBlastId) {
+        const sb = document.getElementById('projShotBlast');
+        if (sb && [...sb.options].some(o => o.value === d.projShotBlastId)) sb.value = d.projShotBlastId;
+      }
+      if (d.projDesignChargeId) {
+        const dc = document.getElementById('projDesignCharge');
+        if (dc && [...dc.options].some(o => o.value === d.projDesignChargeId)) dc.value = d.projDesignChargeId;
+      }
     }
     return true;
   } catch (e) {
@@ -2710,8 +2866,13 @@ async function startNewQuote() {
   clearLocalSave();
 
   // Clear Step 1 inputs
-  const ids = ['projRef','projDate','projName','projClient','projLoc','projDist','projHeight','projArea','projSafety','projDesign','projMargin','projGST'];
+  const ids = ['projRef','projDate','projName','projClient','projLoc','projDist','projHeight','projArea','projMargin','projGST'];
   ids.forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+  // Reset project-wide dropdowns to "None"
+  ['projShotBlast', 'projDesignCharge', 'paintSelect', 'erSafety'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.selectedIndex = 0;
+  });
   // Re-default the date to today
   const dateEl = document.getElementById('projDate');
   if (dateEl) dateEl.value = new Date().toISOString().slice(0,10);
@@ -2912,6 +3073,33 @@ function injectVirtualParameters() {
       if (subKey === 'RM COST') return;
       const opts = subs[sub];
       const prev = existing[sub] || {};
+
+      // Project-wide override #1: Shot Blast
+      // If this subcategory is Shot Blast AND a project-wide selection exists, apply that
+      // selection (matched by option id from this param's available options).
+      if (subcatMatches(sub, 'SHOT BLAST') && d.projShotBlastId) {
+        const opt = opts.find(o => String(o.id) === String(d.projShotBlastId));
+        if (opt) {
+          const r = opt.rate || 0;
+          const perUnit = opt.type === 'PERCENT' ? rmUnitCostForPct * (r/100) : r;
+          out[sub] = { id: opt.id, name: opt.name, group: opt.group||'', rate: r, type: opt.type,
+                       perUnit, qty: paramQty, line: perUnit*paramQty, remark: '', isProjectOverride: true };
+          return;
+        }
+        // If project's selected option isn't in this param's option list, fall through to default below
+      }
+
+      // Project-wide override #2: Fixed Charges (Design)
+      if (subcatMatches(sub, 'FIXED CHARGES (DESIGN)') && d.projDesignChargeId) {
+        const opt = opts.find(o => String(o.id) === String(d.projDesignChargeId));
+        if (opt) {
+          const r = opt.rate || 0;
+          const perUnit = opt.type === 'PERCENT' ? rmUnitCostForPct * (r/100) : r;
+          out[sub] = { id: opt.id, name: opt.name, group: opt.group||'', rate: r, type: opt.type,
+                       perUnit, qty: paramQty, line: perUnit*paramQty, remark: '', isProjectOverride: true };
+          return;
+        }
+      }
 
       if (isAutoSubcat(opts)) {
         if (paramQty <= 0) return;
@@ -3338,7 +3526,7 @@ function drawPdfHeader(doc, opts) {
 
   // Logos (aspect-preserved). Reduced height so they don't overlap the title.
   const LOGO_H = 10;     // mm — further reduced for cleaner header
-  const LOGO_TOP = 6;
+  const LOGO_TOP = 11;   // lowered so logos align with the title center line
   // Left: METFRAA brand logo
   try {
     const logo = document.getElementById('brandLogo');
@@ -3394,18 +3582,19 @@ function drawPdfHeader(doc, opts) {
 
 // Shared footer: page number + reference. Renders once per page in a final pass
 // (after the document is fully built) to avoid double-drawing.
-// Usage: docType 'detailed' → "METFRAA | <ref>" left, "Page X of Y" right
-//        docType 'annexureD' → "<ref>" left, "Page X of Y" right (no METFRAA)
+// docType 'detailed' → ref only on left (e.g. "Met/est/06/2026/299"), "Page X of Y" on right
+// docType 'annexureD' → ref with "Met/est" replaced by "Met/qtn" on left, "Page X of Y" on right
 function drawPdfFooter(doc, ref, docType, pageNum, totalPages) {
   const pageW = doc.internal.pageSize.getWidth();
   const pageH = doc.internal.pageSize.getHeight();
   doc.setFontSize(7);
   doc.setTextColor(120);
+  let leftRef = String(ref || '');
   if (docType === 'annexureD') {
-    doc.text(`${ref || ''}`, 14, pageH - 8);
-  } else {
-    doc.text(`METFRAA  |  ${ref || ''}`, 14, pageH - 8);
+    // Annexure-D version of the ref number: Met/est/... → Met/qtn/...
+    leftRef = leftRef.replace(/Met\/est/i, 'Met/qtn');
   }
+  doc.text(leftRef, 14, pageH - 8);
   doc.text(`Page ${pageNum} of ${totalPages}`, pageW - 14, pageH - 8, { align: 'right' });
 }
 

@@ -615,6 +615,38 @@ app.get('/api/get-project-revision-pdf', async (req, res) => {
 // /Metfraa_Costing_App/Generated_Costings/_Analytics/cost_history.xlsx
 // =============================================================
 const ANALYTICS_PATH = ':/Metfraa_Costing_App/Generated_Costings/_Analytics/cost_history.xlsx:';
+const SEQ_FLOOR_PATH = ':/Metfraa_Costing_App/Generated_Costings/_Analytics/seq_config.json:';
+
+// Read the sequence floor (default 0 if no config file exists)
+async function readSeqFloor() {
+    try {
+        const targetEmail = process.env.TARGET_USER_EMAIL;
+        const content = await graphClient
+            .api(`/users/${targetEmail}/drive/root${SEQ_FLOOR_PATH}/content`)
+            .get();
+        let parsed;
+        if (content && typeof content === 'object' && !Buffer.isBuffer(content)) {
+            parsed = content;
+        } else {
+            const text = typeof content === 'string' ? content
+                       : Buffer.isBuffer(content) ? content.toString('utf8')
+                       : String(content || '');
+            try { parsed = JSON.parse(text); } catch (_) { return 0; }
+        }
+        return parseInt(parsed?.floor, 10) || 0;
+    } catch (_) {
+        return 0; // No config file → floor 0 (i.e. no floor enforced)
+    }
+}
+
+async function writeSeqFloor(floor) {
+    const targetEmail = process.env.TARGET_USER_EMAIL;
+    const payload = JSON.stringify({ floor: parseInt(floor, 10), setAt: new Date().toISOString() });
+    return await graphClient
+        .api(`/users/${targetEmail}/drive/root${SEQ_FLOOR_PATH}/content`)
+        .header('Content-Type', 'application/json')
+        .put(payload);
+}
 const ANALYTICS_HEADERS = [
     'Saved At', 'Client', 'Project', 'Revision', 'Project Folder', 'File Name',
     'Quote Ref', 'Quote Date', 'Location', 'Distance (km)',
@@ -891,12 +923,35 @@ app.get('/api/next-quote-number', async (req, res) => {
             } catch (_) { continue; }
         }
 
-        const nextSeq = maxSeq + 1;
+        // Honour the sequence floor (set by admin endpoint /api/set-seq-floor)
+        const floor = await readSeqFloor();
+        const effectiveMax = Math.max(maxSeq, floor);
+        const nextSeq = effectiveMax + 1;
         const padded = nextSeq < 10 ? `0${nextSeq}` : String(nextSeq);
         const quoteRef = `Met/est/${mm}/${yyyy}/${padded}`;
-        res.json({ success: true, quoteRef, sequence: nextSeq, previousMax: maxSeq });
+        res.json({ success: true, quoteRef, sequence: nextSeq, previousMax: maxSeq, floor });
     } catch (error) {
         console.error('Next Quote Number Error:', error.message);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// Admin endpoint: set the sequence floor. The next quote will be (max(scanned, floor) + 1).
+// Body: { floor: <integer>, password: <admin password> }
+app.post('/api/set-seq-floor', async (req, res) => {
+    try {
+        const { floor, password } = req.body || {};
+        if (process.env.ADMIN_PASSWORD && password !== process.env.ADMIN_PASSWORD) {
+            return res.status(401).json({ success: false, error: 'Unauthorized' });
+        }
+        const f = parseInt(floor, 10);
+        if (!Number.isFinite(f) || f < 0) {
+            return res.status(400).json({ success: false, error: 'Invalid floor value' });
+        }
+        await writeSeqFloor(f);
+        res.json({ success: true, floor: f, message: `Next quote sequence will be at least ${f + 1}` });
+    } catch (error) {
+        console.error('set-seq-floor error:', error.message);
         res.status(500).json({ success: false, error: error.message });
     }
 });
