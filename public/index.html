@@ -496,11 +496,10 @@ body { font-family: 'Segoe UI', Tahoma, sans-serif; background: var(--brand-grey
         <em style="color:#aaa; grid-column:1/-1;">— loading parameters from master sheet —</em>
       </div>
 
-      <div class="section-title" style="margin-top:24px;">Financial Parameters</div>
-      <div class="form-grid">
-        <div class="form-field"><label class="form-label">Margin %</label><input type="number" id="projMargin" class="form-input" value="12" step="0.1"></div>
-        <div class="form-field"><label class="form-label">GST %</label><input type="number" id="projGST" class="form-input" value="18" step="0.1"></div>
-      </div>
+      <!-- Margin % and GST % are now managed from Settings (Master Rate Editor).
+           Kept as hidden inputs so the rest of the code that reads these values keeps working. -->
+      <input type="hidden" id="projMargin" value="12">
+      <input type="hidden" id="projGST" value="18">
     </div>
     <div class="btn-row"><span></span><button class="btn btn-primary" onclick="goToPage(2)" id="nextBtn" disabled>Build Costing ➔</button></div>
   </div>
@@ -659,6 +658,25 @@ body { font-family: 'Segoe UI', Tahoma, sans-serif; background: var(--brand-grey
 
   <!-- SETTINGS PAGE (rate editor) -->
   <div id="pageSettings" class="page">
+    <div class="card" style="border-top:3px solid var(--brand-secondary);">
+      <div class="section-title">
+        <span>💼 Project Defaults</span>
+        <button class="btn btn-warn" onclick="saveProjectDefaults()" id="saveDefaultsBtn" style="font-size:12px; padding:6px 14px;">💾 Save Defaults</button>
+      </div>
+      <p style="font-size:12px; color:#666; margin-bottom:14px;">These values pre-fill every <strong>new</strong> project. Existing saved quotes keep their own values.</p>
+      <div class="form-grid">
+        <div class="form-field">
+          <label class="form-label">Default Margin %</label>
+          <input type="number" id="defaultMargin" class="form-input" value="12" step="0.1" min="0">
+        </div>
+        <div class="form-field">
+          <label class="form-label">Default GST %</label>
+          <input type="number" id="defaultGST" class="form-input" value="18" step="0.1" min="0">
+        </div>
+      </div>
+      <div id="defaultsStatus" style="font-size:11px; color:#666; margin-top:8px;"></div>
+    </div>
+
     <div class="card">
       <div class="section-title">
         <span>Master Rate Editor</span>
@@ -955,16 +973,32 @@ function subcatMatches(subName, target) {
   return norm(subName).includes(norm(target));
 }
 
-// Returns all unique options found in any param's <subcatTarget> subcategory.
-// Dedup by option id (so the same screw option doesn't appear 12 times).
+// Returns deduplicated options found in any param's <subcatTarget> subcategory.
+// Dedup is by canonical (name, rate) combo so identical options across params show once.
+// Each returned option carries an `allIds` Set of every per-param id mapped to it,
+// so the project-wide selection can match the right id per param later.
 function collectGlobalSubcatOptions(subcatTarget) {
-  const seen = new Map(); // id → option
+  const seen = new Map(); // canonicalKey → { id (first), name, rate, allIds }
+  const normName = s => String(s || '').trim().toUpperCase().replace(/\s+/g, ' ');
   Object.entries(MASTER_DB).forEach(([pName, node]) => {
     if (!node || node.__virtual || !node.subs) return;
     Object.keys(node.subs).forEach(subKey => {
       if (subcatMatches(subKey, subcatTarget)) {
         (node.subs[subKey] || []).forEach(o => {
-          if (o && o.id && !seen.has(o.id)) seen.set(o.id, o);
+          if (!o || !o.id) return;
+          const key = `${normName(o.name)}|${o.rate || 0}`;
+          if (seen.has(key)) {
+            seen.get(key).allIds.add(o.id);
+          } else {
+            seen.set(key, {
+              id: o.id,                   // representative id (first seen)
+              name: o.name,
+              rate: o.rate || 0,
+              type: o.type,
+              canonicalName: normName(o.name),
+              allIds: new Set([o.id])
+            });
+          }
         });
       }
     });
@@ -980,9 +1014,11 @@ function populateShotBlastDropdown() {
   sel.innerHTML = '<option value="">— None —</option>';
   opts.forEach(o => {
     const el = document.createElement('option');
-    el.value = o.id;
+    // Use canonical "NAME|RATE" as the value so it's stable across params
+    el.value = `${o.canonicalName}|${o.rate}`;
     el.dataset.rate = o.rate || 0;
     el.dataset.name = o.name || '';
+    el.dataset.canonicalName = o.canonicalName;
     el.textContent = `${o.name} (${o.rate ? '₹' + (o.rate).toLocaleString('en-IN') : '₹0'})`;
     sel.appendChild(el);
   });
@@ -997,9 +1033,10 @@ function populateDesignChargeDropdown() {
   sel.innerHTML = '<option value="">— None —</option>';
   opts.forEach(o => {
     const el = document.createElement('option');
-    el.value = o.id;
+    el.value = `${o.canonicalName}|${o.rate}`;
     el.dataset.rate = o.rate || 0;
     el.dataset.name = o.name || '';
+    el.dataset.canonicalName = o.canonicalName;
     el.textContent = `${o.name} (${o.rate ? '₹' + (o.rate).toLocaleString('en-IN') : '₹0'})`;
     sel.appendChild(el);
   });
@@ -1010,14 +1047,22 @@ function getProjShotBlastSelection() {
   const sel = document.getElementById('projShotBlast');
   if (!sel || !sel.value) return null;
   const opt = sel.options[sel.selectedIndex];
-  return { id: sel.value, name: opt.dataset.name, rate: parseFloat(opt.dataset.rate) || 0 };
+  return {
+    canonicalName: opt.dataset.canonicalName,
+    name: opt.dataset.name,
+    rate: parseFloat(opt.dataset.rate) || 0
+  };
 }
 
 function getProjDesignChargeSelection() {
   const sel = document.getElementById('projDesignCharge');
   if (!sel || !sel.value) return null;
   const opt = sel.options[sel.selectedIndex];
-  return { id: sel.value, name: opt.dataset.name, rate: parseFloat(opt.dataset.rate) || 0 };
+  return {
+    canonicalName: opt.dataset.canonicalName,
+    name: opt.dataset.name,
+    rate: parseFloat(opt.dataset.rate) || 0
+  };
 }
 
 // =========================================================
@@ -1361,6 +1406,8 @@ window.onload = async () => {
     // Default the date to today if empty
     const dateEl = document.getElementById('projDate');
     if (dateEl && !dateEl.value) dateEl.value = new Date().toISOString().slice(0,10);
+    // Apply saved project defaults (Margin %, GST %) to the hidden inputs
+    applyDefaultsToHiddenInputs();
   }
 };
 
@@ -1482,14 +1529,34 @@ function _applySavedQuotation(saved) {
   document.getElementById('projMargin').value = d.margin || 12;
   document.getElementById('projGST').value = d.gst || 18;
 
-  // Restore project-wide subcategory selections
-  if (d.projShotBlastId) {
+  // Restore project-wide subcategory selections (canonical name + rate based).
+  // Back-compat: old saves used `projShotBlastId` — try that as a fallback.
+  if (d.projShotBlastCanonical) {
     const sb = document.getElementById('projShotBlast');
-    if (sb && [...sb.options].some(o => o.value === d.projShotBlastId)) sb.value = d.projShotBlastId;
+    if (sb) {
+      const targetVal = `${d.projShotBlastCanonical}|${d.projShotBlastRate || 0}`;
+      if ([...sb.options].some(o => o.value === targetVal)) sb.value = targetVal;
+    }
+  } else if (d.projShotBlastId) {
+    // Legacy: try to find an option whose original id matches
+    const sb = document.getElementById('projShotBlast');
+    if (sb) {
+      const match = [...sb.options].find(o => o.dataset.name && d.projShotBlastName && o.dataset.name === d.projShotBlastName);
+      if (match) sb.value = match.value;
+    }
   }
-  if (d.projDesignChargeId) {
+  if (d.projDesignChargeCanonical) {
     const dc = document.getElementById('projDesignCharge');
-    if (dc && [...dc.options].some(o => o.value === d.projDesignChargeId)) dc.value = d.projDesignChargeId;
+    if (dc) {
+      const targetVal = `${d.projDesignChargeCanonical}|${d.projDesignChargeRate || 0}`;
+      if ([...dc.options].some(o => o.value === targetVal)) dc.value = targetVal;
+    }
+  } else if (d.projDesignChargeId) {
+    const dc = document.getElementById('projDesignCharge');
+    if (dc) {
+      const match = [...dc.options].find(o => o.dataset.name && d.projDesignChargeName && o.dataset.name === d.projDesignChargeName);
+      if (match) dc.value = match.value;
+    }
   }
 
   if (d.erSafetyRate !== undefined) {
@@ -1665,7 +1732,72 @@ function _enterSettings() {
   document.getElementById('pageSettings').classList.add('active');
   document.getElementById('wizardSteps').style.display = 'none';
   renderRatesEditor();
+  loadProjectDefaults();
   window.scrollTo(0, 0);
+}
+
+// =========================================================
+// PROJECT DEFAULTS (Margin %, GST %) — managed from Settings
+// =========================================================
+async function loadProjectDefaults() {
+  try {
+    const res = await fetch(`${RENDER_URL}/api/get-defaults`);
+    if (!res.ok) return;
+    const data = await res.json();
+    if (!data.success) return;
+    const m = document.getElementById('defaultMargin');
+    const g = document.getElementById('defaultGST');
+    if (m) m.value = data.margin;
+    if (g) g.value = data.gst;
+  } catch (_) {}
+}
+
+async function saveProjectDefaults() {
+  const m = parseFloat(document.getElementById('defaultMargin').value);
+  const g = parseFloat(document.getElementById('defaultGST').value);
+  if (!Number.isFinite(m) || m < 0 || !Number.isFinite(g) || g < 0) {
+    toast('Enter valid Margin and GST values', 'err'); return;
+  }
+  if (!adminPassword) {
+    showPwModal();
+    toast('Admin password required to save defaults', 'err', 3000);
+    return;
+  }
+  const btn = document.getElementById('saveDefaultsBtn');
+  btn.disabled = true;
+  const stat = document.getElementById('defaultsStatus');
+  if (stat) stat.innerHTML = 'Saving…';
+  try {
+    const res = await fetch(`${RENDER_URL}/api/set-defaults`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ margin: m, gst: g, password: adminPassword })
+    });
+    const data = await res.json();
+    if (!data.success) throw new Error(data.error || 'Failed');
+    if (stat) stat.innerHTML = `<span style="color:#28a745;">✓ Defaults saved. Next new project will use Margin ${data.margin}% / GST ${data.gst}%.</span>`;
+    toast(`✓ Defaults saved`, 'ok', 3000);
+  } catch (e) {
+    if (stat) stat.innerHTML = `<span style="color:#dc3545;">❌ ${e.message}</span>`;
+    toast('❌ ' + e.message, 'err');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// Fetch defaults at app load and apply them to the hidden Margin/GST inputs.
+// Only applies if no draft is being restored (i.e. fresh app open / new quote).
+async function applyDefaultsToHiddenInputs() {
+  try {
+    const res = await fetch(`${RENDER_URL}/api/get-defaults`);
+    if (!res.ok) return;
+    const data = await res.json();
+    if (!data.success) return;
+    const mEl = document.getElementById('projMargin');
+    const gEl = document.getElementById('projGST');
+    if (mEl) mEl.value = data.margin;
+    if (gEl) gEl.value = data.gst;
+  } catch (_) {}
 }
 
 // =========================================================
@@ -2278,11 +2410,12 @@ function captureProjectDetails() {
     erSafetyRate,
     erHeightLabel: erHeightBand.label,
     erHeightRate: erHeightBand.rate,
-    // Project-wide subcategory selections (auto-applied per param in injectVirtualParameters)
-    projShotBlastId: shotBlastSel ? shotBlastSel.id : null,
+    // Project-wide subcategory selections (auto-applied per param in injectVirtualParameters).
+    // Matched per-param by canonical name + rate (not id, since each param has its own ids).
+    projShotBlastCanonical: shotBlastSel ? shotBlastSel.canonicalName : null,
     projShotBlastName: shotBlastSel ? shotBlastSel.name : null,
     projShotBlastRate: shotBlastSel ? shotBlastSel.rate : 0,
-    projDesignChargeId: designChargeSel ? designChargeSel.id : null,
+    projDesignChargeCanonical: designChargeSel ? designChargeSel.canonicalName : null,
     projDesignChargeName: designChargeSel ? designChargeSel.name : null,
     projDesignChargeRate: designChargeSel ? designChargeSel.rate : 0
   };
@@ -2828,13 +2961,19 @@ function restoreFromLocalSave() {
       set('projHeight', d.height); set('projArea', d.area);
       set('projMargin', d.margin); set('projGST', d.gst);
       // Project-wide subcat selections (Shot Blast, Fixed Charges Design)
-      if (d.projShotBlastId) {
+      if (d.projShotBlastCanonical) {
         const sb = document.getElementById('projShotBlast');
-        if (sb && [...sb.options].some(o => o.value === d.projShotBlastId)) sb.value = d.projShotBlastId;
+        if (sb) {
+          const targetVal = `${d.projShotBlastCanonical}|${d.projShotBlastRate || 0}`;
+          if ([...sb.options].some(o => o.value === targetVal)) sb.value = targetVal;
+        }
       }
-      if (d.projDesignChargeId) {
+      if (d.projDesignChargeCanonical) {
         const dc = document.getElementById('projDesignCharge');
-        if (dc && [...dc.options].some(o => o.value === d.projDesignChargeId)) dc.value = d.projDesignChargeId;
+        if (dc) {
+          const targetVal = `${d.projDesignChargeCanonical}|${d.projDesignChargeRate || 0}`;
+          if ([...dc.options].some(o => o.value === targetVal)) dc.value = targetVal;
+        }
       }
     }
     return true;
@@ -2912,6 +3051,9 @@ async function startNewQuote() {
   } catch (e) {
     // Silent fail — user can type the ref manually
   }
+
+  // Apply saved project defaults (Margin, GST) to the hidden inputs
+  applyDefaultsToHiddenInputs();
 
   toast('📄 New quote started — fields cleared', 'ok', 3000);
   goToPage(1);
@@ -3074,11 +3216,14 @@ function injectVirtualParameters() {
       const opts = subs[sub];
       const prev = existing[sub] || {};
 
-      // Project-wide override #1: Shot Blast
-      // If this subcategory is Shot Blast AND a project-wide selection exists, apply that
-      // selection (matched by option id from this param's available options).
-      if (subcatMatches(sub, 'SHOT BLAST') && d.projShotBlastId) {
-        const opt = opts.find(o => String(o.id) === String(d.projShotBlastId));
+      // Project-wide override #1: Shot Blast.
+      // Match this param's option by canonical name + rate (because each param has its own id
+      // for what is functionally the same option).
+      if (subcatMatches(sub, 'SHOT BLAST') && d.projShotBlastCanonical) {
+        const targetCanon = d.projShotBlastCanonical;
+        const targetRate = d.projShotBlastRate || 0;
+        const normName = s => String(s || '').trim().toUpperCase().replace(/\s+/g, ' ');
+        const opt = opts.find(o => normName(o.name) === targetCanon && (o.rate || 0) === targetRate);
         if (opt) {
           const r = opt.rate || 0;
           const perUnit = opt.type === 'PERCENT' ? rmUnitCostForPct * (r/100) : r;
@@ -3086,12 +3231,15 @@ function injectVirtualParameters() {
                        perUnit, qty: paramQty, line: perUnit*paramQty, remark: '', isProjectOverride: true };
           return;
         }
-        // If project's selected option isn't in this param's option list, fall through to default below
+        // If no matching option in this param, fall through to whatever was previously selected
       }
 
       // Project-wide override #2: Fixed Charges (Design)
-      if (subcatMatches(sub, 'FIXED CHARGES (DESIGN)') && d.projDesignChargeId) {
-        const opt = opts.find(o => String(o.id) === String(d.projDesignChargeId));
+      if (subcatMatches(sub, 'FIXED CHARGES (DESIGN)') && d.projDesignChargeCanonical) {
+        const targetCanon = d.projDesignChargeCanonical;
+        const targetRate = d.projDesignChargeRate || 0;
+        const normName = s => String(s || '').trim().toUpperCase().replace(/\s+/g, ' ');
+        const opt = opts.find(o => normName(o.name) === targetCanon && (o.rate || 0) === targetRate);
         if (opt) {
           const r = opt.rate || 0;
           const perUnit = opt.type === 'PERCENT' ? rmUnitCostForPct * (r/100) : r;

@@ -616,6 +616,45 @@ app.get('/api/get-project-revision-pdf', async (req, res) => {
 // =============================================================
 const ANALYTICS_PATH = ':/Metfraa_Costing_App/Generated_Costings/_Analytics/cost_history.xlsx:';
 const SEQ_FLOOR_PATH = ':/Metfraa_Costing_App/Generated_Costings/_Analytics/seq_config.json:';
+const PROJECT_DEFAULTS_PATH = ':/Metfraa_Costing_App/Generated_Costings/_Analytics/project_defaults.json:';
+
+// Read project defaults (margin %, gst %) — fall back to hardcoded 12 / 18 if no file
+async function readProjectDefaults() {
+    try {
+        const targetEmail = process.env.TARGET_USER_EMAIL;
+        const content = await graphClient
+            .api(`/users/${targetEmail}/drive/root${PROJECT_DEFAULTS_PATH}/content`)
+            .get();
+        let parsed;
+        if (content && typeof content === 'object' && !Buffer.isBuffer(content)) {
+            parsed = content;
+        } else {
+            const text = typeof content === 'string' ? content
+                       : Buffer.isBuffer(content) ? content.toString('utf8')
+                       : String(content || '');
+            try { parsed = JSON.parse(text); } catch (_) { return { margin: 12, gst: 18 }; }
+        }
+        return {
+            margin: Number.isFinite(parseFloat(parsed?.margin)) ? parseFloat(parsed.margin) : 12,
+            gst: Number.isFinite(parseFloat(parsed?.gst)) ? parseFloat(parsed.gst) : 18
+        };
+    } catch (_) {
+        return { margin: 12, gst: 18 };
+    }
+}
+
+async function writeProjectDefaults(margin, gst) {
+    const targetEmail = process.env.TARGET_USER_EMAIL;
+    const payload = JSON.stringify({
+        margin: parseFloat(margin),
+        gst: parseFloat(gst),
+        setAt: new Date().toISOString()
+    });
+    return await graphClient
+        .api(`/users/${targetEmail}/drive/root${PROJECT_DEFAULTS_PATH}/content`)
+        .header('Content-Type', 'application/json')
+        .put(payload);
+}
 
 // Read the sequence floor (default 0 if no config file exists)
 async function readSeqFloor() {
@@ -952,6 +991,39 @@ app.post('/api/set-seq-floor', async (req, res) => {
         res.json({ success: true, floor: f, message: `Next quote sequence will be at least ${f + 1}` });
     } catch (error) {
         console.error('set-seq-floor error:', error.message);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// =============================================================
+// ROUTE: Get project defaults (margin %, gst %) used for NEW projects
+// =============================================================
+app.get('/api/get-defaults', async (req, res) => {
+    try {
+        const defaults = await readProjectDefaults();
+        res.json({ success: true, ...defaults });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// =============================================================
+// ROUTE: Set project defaults (margin %, gst %). Admin password required.
+// =============================================================
+app.post('/api/set-defaults', async (req, res) => {
+    try {
+        const { margin, gst, password } = req.body || {};
+        if (process.env.ADMIN_PASSWORD && password !== process.env.ADMIN_PASSWORD) {
+            return res.status(401).json({ success: false, error: 'Unauthorized' });
+        }
+        const m = parseFloat(margin), g = parseFloat(gst);
+        if (!Number.isFinite(m) || m < 0 || !Number.isFinite(g) || g < 0) {
+            return res.status(400).json({ success: false, error: 'Invalid margin or gst' });
+        }
+        await writeProjectDefaults(m, g);
+        res.json({ success: true, margin: m, gst: g });
+    } catch (error) {
+        console.error('set-defaults error:', error.message);
         res.status(500).json({ success: false, error: error.message });
     }
 });
