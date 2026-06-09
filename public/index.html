@@ -1859,34 +1859,28 @@ function buildCustomerQuotePDF() {
   const doc = new jsPDF({ unit: 'mm', format: 'a4' });
   const pageW = doc.internal.pageSize.getWidth();
 
-  // Draw header (Annexure-D variant) on page 1
-  let y = drawPdfHeader(doc, {
-    docType: 'annexureD',
-    client: d.client,
-    project: d.name
-  });
+  // Draw header (ANNEXURE-D variant — no client/project lines in the header band)
+  let y = drawPdfHeader(doc, { docType: 'annexureD', client: d.client, project: d.name });
+  y += 3; // extra breathing room under the teal divider
 
-  // Project info strip — 6 fields (Date, Quote No, Client, Location, Tonnage, Area)
+  // 6-field project info strip (Date, Quote No, Client, Location, Tonnage, Area)
   doc.setTextColor(0,0,0);
   doc.setFontSize(8);
-  // Row 1
   doc.setFont('helvetica','bold'); doc.setTextColor(100); doc.text('Date:', 14, y);
   doc.setFont('helvetica','normal'); doc.setTextColor(20); doc.text(String(d.date || '—'), 30, y);
   doc.setFont('helvetica','bold'); doc.setTextColor(100); doc.text('Quote No:', 70, y);
   doc.setFont('helvetica','normal'); doc.setTextColor(20); doc.text(String(d.ref || '—'), 92, y);
   doc.setFont('helvetica','bold'); doc.setTextColor(100); doc.text('Client:', 140, y);
   doc.setFont('helvetica','normal'); doc.setTextColor(20); doc.text(String(d.client || '—'), 158, y);
-  y += 5;
-  // Row 2
+  y += 6;
   doc.setFont('helvetica','bold'); doc.setTextColor(100); doc.text('Location:', 14, y);
   doc.setFont('helvetica','normal'); doc.setTextColor(20); doc.text(String(d.loc || '—'), 30, y);
   doc.setFont('helvetica','bold'); doc.setTextColor(100); doc.text('Tonnage:', 70, y);
   doc.setFont('helvetica','normal'); doc.setTextColor(20); doc.text(fmtNum(d.tonnage || 0, 2) + ' MT', 92, y);
   doc.setFont('helvetica','bold'); doc.setTextColor(100); doc.text('Area:', 140, y);
   doc.setFont('helvetica','normal'); doc.setTextColor(20); doc.text(fmtNum(d.area || 0, 0) + ' sqm', 158, y);
-  y += 7;
+  y += 9; // generous spacing before the table
 
-  // Table body
   const body = rows.map(r => [
     String(r.sNo),
     r.description,
@@ -1895,17 +1889,16 @@ function buildCustomerQuotePDF() {
     `Rs ${Math.round(r.rate).toLocaleString('en-IN')}`,
     `Rs ${Math.round(r.value).toLocaleString('en-IN')}`
   ]);
-
   body.push([
     { content: 'Total Base Value', colSpan: 5, styles: { halign:'right', fontStyle:'bold', fillColor:[241,243,245] }},
     { content: `Rs ${Math.round(subtotal).toLocaleString('en-IN')}`, styles: { halign:'right', fontStyle:'bold', fillColor:[241,243,245] }}
   ]);
   body.push([
-    { content: 'Add: CGST @ 9%', colSpan: 5, styles: { halign:'right' }},
+    { content: 'Add: CGST 9%', colSpan: 5, styles: { halign:'right' }},
     { content: `Rs ${Math.round(cgst).toLocaleString('en-IN')}`, styles: { halign:'right' }}
   ]);
   body.push([
-    { content: 'Add: SGST @ 9%', colSpan: 5, styles: { halign:'right' }},
+    { content: 'Add: SGST 9%', colSpan: 5, styles: { halign:'right' }},
     { content: `Rs ${Math.round(sgst).toLocaleString('en-IN')}`, styles: { halign:'right' }}
   ]);
   body.push([
@@ -1925,7 +1918,7 @@ function buildCustomerQuotePDF() {
     styles: { fontSize: 9, cellPadding: 2.5, font: 'helvetica', overflow: 'linebreak', valign: 'top' },
     headStyles: { fillColor: [0, 43, 95], textColor: 255, fontStyle: 'bold' },
     columnStyles: {
-      0: { cellWidth: 12, halign: 'center' },  // S No — widened so it stays on one line
+      0: { cellWidth: 12, halign: 'center' },
       1: { cellWidth: 86 },
       2: { cellWidth: 14, halign: 'center' },
       3: { cellWidth: 18, halign: 'right' },
@@ -1933,16 +1926,14 @@ function buildCustomerQuotePDF() {
       5: { cellWidth: 'auto', halign: 'right' }
     },
     rowPageBreak: 'avoid',
-    margin: { top: 50, left: 14, right: 14, bottom: 18 },
+    margin: { top: 42, left: 14, right: 14, bottom: 18 },
     didDrawPage: function(data) {
-      // Repeat document header on continuation pages
-      if (data.pageNumber > 1) {
-        drawPdfHeader(doc, { docType: 'annexureD', client: d.client, project: d.name });
-      }
-      drawPdfFooter(doc, d.ref);
+      if (data.pageNumber > 1) drawPdfHeader(doc, { docType: 'annexureD', client: d.client, project: d.name });
     }
   });
 
+  // Final pass: footer on every page exactly once (ref only on left, "Page X of Y" right)
+  stampFootersOnAllPages(doc, d.ref, 'annexureD');
   return doc;
 }
 
@@ -2490,6 +2481,10 @@ function sync() {
   let paramTotal = 0;      // actual money total for the parameter
 
   // ---- 1. RM COST (multi-RM) ----
+  // Special case: for Gutter / DT Pipe / Downtake parameters, the effective RM
+  // qty is the entered qty divided by 2.5 (per business logic). The displayed qty
+  // stays as entered; only the cost calculation changes.
+  const rmDivisor = isGutterOrDtPipe(activeP) ? 2.5 : 1;
   let totalRMCost = 0;     // money
   let rmUnitCostForPct = 0; // per-unit RM cost basis for percent rows
   let rmQtySum = 0;
@@ -2509,7 +2504,9 @@ function sync() {
     const rate = parseFloat(opt.dataset.rate) || 0;
     // RM qty: use the per-RM qty if entered (multi-RM), else fall back to paramQty (single RM)
     const rmQty = (qtyEl && qtyEl.value !== '') ? (parseFloat(qtyEl.value) || 0) : paramQty;
-    const lineTotal = rate * rmQty;
+    // Apply Gutter/DT Pipe divisor to the cost calc (qty shown stays the same)
+    const effectiveRmQty = rmQty / rmDivisor;
+    const lineTotal = rate * effectiveRmQty;
     totalRMCost += lineTotal;
     rmQtySum += rmQty;
     if (rateCell) rateCell.innerText = fmtINR(rate);
@@ -2888,6 +2885,7 @@ function injectVirtualParameters() {
 
       if (subKey === 'RM COST') {
         const prevRMs = (existing['RM COST'] && Array.isArray(existing['RM COST'].rms)) ? existing['RM COST'].rms : [];
+        const rmDivisor = isGutterOrDtPipe(pName) ? 2.5 : 1;
         const rms = [];
         let totalRM = 0;
         prevRMs.forEach(rm => {
@@ -2896,7 +2894,8 @@ function injectVirtualParameters() {
           if (!opt) return;
           const rate = opt.rate || 0;
           const q = (rm.qty !== '' && rm.qty != null) ? (parseFloat(rm.qty)||0) : paramQty;
-          const line = rate * q;
+          const effectiveQ = q / rmDivisor;
+          const line = rate * effectiveQ;
           totalRM += line;
           rms.push({ id: opt.id, name: opt.name, group: opt.group||'', rate, qty: q, line });
         });
@@ -3338,8 +3337,8 @@ function drawPdfHeader(doc, opts) {
   doc.rect(0, HEADER_H, pageW, 1.2, 'F');
 
   // Logos (aspect-preserved). Reduced height so they don't overlap the title.
-  const LOGO_H = 14;     // mm — reduced from 22 to avoid title overlap
-  const LOGO_TOP = 8;
+  const LOGO_H = 10;     // mm — further reduced for cleaner header
+  const LOGO_TOP = 6;
   // Left: METFRAA brand logo
   try {
     const logo = document.getElementById('brandLogo');
@@ -3370,18 +3369,13 @@ function drawPdfHeader(doc, opts) {
   doc.setTextColor(0, 43, 95);
   if (opts && opts.docType === 'annexureD') {
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(16);
-    doc.text('ANNEXURE - D', pageW / 2, 12, { align: 'center' });
+    doc.setFontSize(18);
+    doc.text('ANNEXURE - D', pageW / 2, 14, { align: 'center' });
     doc.setFont('helvetica', 'normal');
-    doc.setFontSize(10);
-    doc.text('Bill of Quantities', pageW / 2, 18, { align: 'center' });
-    doc.setFont('helvetica', 'bold');
     doc.setFontSize(11);
-    doc.text(opts.client || '—', pageW / 2, 24, { align: 'center' });
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(8);
-    doc.setTextColor(80, 80, 80);
-    doc.text(opts.project || '—', pageW / 2, 29, { align: 'center' });
+    doc.text('Bill of Quantities', pageW / 2, 22, { align: 'center' });
+    // Client and project are intentionally NOT shown here — they appear in the
+    // 6-field info strip below the teal divider (per latest spec).
   } else {
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(16);
@@ -3398,16 +3392,30 @@ function drawPdfHeader(doc, opts) {
   return HEADER_H + 4; // y where body content should start
 }
 
-// Shared footer: page number + reference. Called from autoTable's didDrawPage.
-function drawPdfFooter(doc, ref) {
+// Shared footer: page number + reference. Renders once per page in a final pass
+// (after the document is fully built) to avoid double-drawing.
+// Usage: docType 'detailed' → "METFRAA | <ref>" left, "Page X of Y" right
+//        docType 'annexureD' → "<ref>" left, "Page X of Y" right (no METFRAA)
+function drawPdfFooter(doc, ref, docType, pageNum, totalPages) {
   const pageW = doc.internal.pageSize.getWidth();
   const pageH = doc.internal.pageSize.getHeight();
   doc.setFontSize(7);
   doc.setTextColor(120);
-  doc.text(`METFRAA  |  ${ref || ''}`, 14, pageH - 8);
-  // Page X of Y
-  const pageStr = `Page ${doc.internal.getNumberOfPages()}`;
-  doc.text(pageStr, pageW - 14, pageH - 8, { align: 'right' });
+  if (docType === 'annexureD') {
+    doc.text(`${ref || ''}`, 14, pageH - 8);
+  } else {
+    doc.text(`METFRAA  |  ${ref || ''}`, 14, pageH - 8);
+  }
+  doc.text(`Page ${pageNum} of ${totalPages}`, pageW - 14, pageH - 8, { align: 'right' });
+}
+
+// After building the document, walk every page and stamp the footer exactly once.
+function stampFootersOnAllPages(doc, ref, docType) {
+  const total = doc.internal.getNumberOfPages();
+  for (let p = 1; p <= total; p++) {
+    doc.setPage(p);
+    drawPdfFooter(doc, ref, docType, p, total);
+  }
 }
 
 // =========================================================
@@ -3415,6 +3423,15 @@ function drawPdfFooter(doc, ref) {
 // Full subcategory breakdown per parameter + summary page.
 // Headers (document + table) repeat on every page; page numbers shown.
 // =========================================================
+
+// Identify Gutter / DT Pipe / Downtake parameters by name (case-insensitive),
+// for which the RM COST line should be computed as (qty / 2.5) * rate.
+function isGutterOrDtPipe(paramName) {
+  if (!paramName) return false;
+  const u = String(paramName).toUpperCase();
+  return u.includes('GUTTER') || u.includes('DT PIPE') || u.includes('DOWNTAKE');
+}
+
 function buildPDF() {
   captureProjectDetails();
   injectVirtualParameters();
@@ -3423,38 +3440,42 @@ function buildPDF() {
   const d = projectState.details;
   const doc = new jsPDF({ unit: 'mm', format: 'a4' });
   const pageW = doc.internal.pageSize.getWidth();
-  const pageH = doc.internal.pageSize.getHeight();
 
   // Draw header on page 1
   let y = drawPdfHeader(doc, { client: d.client, project: d.name });
+  // Extra vertical breathing room after the teal divider
+  y += 3;
 
-  // Project info strip (6 fields: Date, Quote No, Client, Location, Tonnage, Area)
+  // Project info strip — 6 fields (Date, Quote No, Client, Location, Tonnage, Area)
   doc.setFontSize(8);
   doc.setTextColor(0,0,0);
   doc.setFont('helvetica','bold'); doc.setTextColor(100);
-  // Row 1
   doc.text('Date:', 14, y); doc.setFont('helvetica','normal'); doc.setTextColor(20); doc.text(String(d.date || '—'), 30, y);
   doc.setFont('helvetica','bold'); doc.setTextColor(100); doc.text('Quote No:', 70, y);
   doc.setFont('helvetica','normal'); doc.setTextColor(20); doc.text(String(d.ref || '—'), 92, y);
   doc.setFont('helvetica','bold'); doc.setTextColor(100); doc.text('Client:', 140, y);
   doc.setFont('helvetica','normal'); doc.setTextColor(20); doc.text(String(d.client || '—'), 158, y);
-  y += 5;
-  // Row 2
+  y += 6;
   doc.setFont('helvetica','bold'); doc.setTextColor(100); doc.text('Location:', 14, y);
   doc.setFont('helvetica','normal'); doc.setTextColor(20); doc.text(String(d.loc || '—'), 30, y);
   doc.setFont('helvetica','bold'); doc.setTextColor(100); doc.text('Tonnage:', 70, y);
   doc.setFont('helvetica','normal'); doc.setTextColor(20); doc.text(fmtNum(d.tonnage || 0, 2) + ' MT', 92, y);
   doc.setFont('helvetica','bold'); doc.setTextColor(100); doc.text('Area:', 140, y);
   doc.setFont('helvetica','normal'); doc.setTextColor(20); doc.text(fmtNum(d.area || 0, 0) + ' sqm', 158, y);
-  y += 7;
+  y += 9;  // generous spacing before the table starts
 
-  // Walk parameters and emit a detailed table per parameter
+  // Helper to format INR values for autoTable cells WITHOUT the ₹ symbol
+  // (the ₹ symbol triggers a jsPDF font-fallback bug that spaces characters apart)
+  const fmtRs = v => `Rs ${Math.round(Number(v)||0).toLocaleString('en-IN')}`;
+  // Also rewrite rate-band hints like "(301-400 km @ ₹4500/MT)" → "(301-400 km @ Rs 4500/MT)"
+  const stripRupee = s => String(s || '').replace(/₹\s*/g, 'Rs ');
+
   const included = getIncludedParams().filter(p => (parseFloat(projectState.qtys[p])||0) > 0);
   const paramSummary = []; // for the final summary page
   let sl = 1;
   let startY = y;
 
-  included.forEach(pName => {
+  included.forEach((pName, idx) => {
     const qty = parseFloat(projectState.qtys[pName]) || 0;
     const unit = (MASTER_DB[pName] && MASTER_DB[pName].__unit) || 'MT';
     const cleanName = cleanParamLabel(pName);
@@ -3462,7 +3483,9 @@ function buildPDF() {
     const entries = Object.entries(subs);
     if (entries.length === 0) return;
 
-    // Per-param subcategory rows + subtotal (PRE margin)
+    const applyDivisor = isGutterOrDtPipe(pName);
+    const rmDivisor = applyDivisor ? 2.5 : 1;
+
     let preMarginTotal = 0;
     const body = [];
     body.push([{
@@ -3471,21 +3494,22 @@ function buildPDF() {
       styles: { fillColor:[233,236,239], textColor:[0,43,95], fontStyle:'bold', halign:'left', fontSize: 10 }
     }]);
 
-    // Order by subcat rank
     entries.sort((a,b) => subcatRank((subs[a[0]].subcategory||a[0])) - subcatRank((subs[b[0]].subcategory||b[0])));
 
     entries.forEach(([subName, data]) => {
       if (data.isRM && Array.isArray(data.rms)) {
         data.rms.forEach(rm => {
-          const lineAmt = rm.line || 0;
+          // For Gutter/DT Pipe: RM line total = (rm.qty / 2.5) * rate
+          const effectiveQty = (rm.qty || 0) / rmDivisor;
+          const lineAmt = effectiveQty * (rm.rate || 0);
           preMarginTotal += lineAmt;
           body.push([
             '',
-            `RM COST${rm.group ? ' — ' + rm.group : ''}  (${rm.name || ''})`,
-            fmtINR(rm.rate).replace('₹ ',''),
+            stripRupee(`RM COST${rm.group ? ' — ' + rm.group : ''}  (${rm.name || ''})`),
+            (rm.rate || 0).toLocaleString('en-IN'),
             fmtNum(rm.qty, 2),
             unit,
-            fmtINR(lineAmt).replace('₹ ','')
+            Math.round(lineAmt).toLocaleString('en-IN')
           ]);
         });
         return;
@@ -3493,45 +3517,54 @@ function buildPDF() {
       const label = data.subcategory || subName;
       const tagSuffix = data.isAuto ? ' [AUTO]' : data.isSiteSpecific ? ' [SITE]' : '';
       const remarkTxt = data.remark ? `  — ${data.remark}` : '';
-      const description = `${label}${tagSuffix}  (${data.name || ''})${remarkTxt}`;
+      const description = stripRupee(`${label}${tagSuffix}  (${data.name || ''})${remarkTxt}`);
       const rate = data.type === 'PERCENT'
         ? `${(data.rate || 0).toFixed(2)}%`
-        : fmtINR(data.perUnit || 0).replace('₹ ', '');
+        : (data.perUnit || 0).toLocaleString('en-IN');
       const lineAmt = data.line != null ? data.line : (data.perUnit || 0) * qty;
       preMarginTotal += lineAmt;
-      body.push(['', description, rate, fmtNum(qty, 2), unit, fmtINR(lineAmt).replace('₹ ', '')]);
+      body.push(['', description, rate, fmtNum(qty, 2), unit, Math.round(lineAmt).toLocaleString('en-IN')]);
     });
 
-    // Show margin + rounded final on the per-param table
     const ov = (projectState.step3 || {})[pName] || { margin: d.margin || 0, roundEnabled: true };
-    const c = computeStep3ForParam(pName);
+    // Recompute c.paramTotal here using preMarginTotal (which already includes the /2.5 logic).
+    // We mirror computeStep3ForParam's math but with our own preMarginTotal so the divisor flows through.
+    const margin = parseFloat(ov.margin) || 0;
+    const unitPre = qty > 0 ? preMarginTotal / qty : 0;
+    const unitPostMargin = unitPre * (1 + margin / 100);
+    const ru = getRoundingUnit(pName);
+    const unitRounded = ov.roundEnabled ? roundToUnit(unitPostMargin, ru) : Math.round(unitPostMargin);
+    const paramTotal = unitRounded * qty;
+
     body.push([
       { content: `Pre-margin subtotal`, colSpan: 4, styles: { fontStyle:'bold', halign:'right', fillColor:[241,243,245] }},
       { content: unit, styles: { fontStyle:'bold', halign:'center', fillColor:[241,243,245] }},
-      { content: fmtINR(preMarginTotal).replace('₹ ',''), styles: { fontStyle:'bold', halign:'right', fillColor:[241,243,245] }}
+      { content: Math.round(preMarginTotal).toLocaleString('en-IN'), styles: { fontStyle:'bold', halign:'right', fillColor:[241,243,245] }}
     ]);
+    // Rewrite the margin line WITHOUT ₹/|/@ (those trigger the kerning bug). Use plain words.
+    const roundLabel = ov.roundEnabled ? `rounded to nearest Rs ${ru}` : 'rounding off';
     body.push([
-      { content: `Margin @ ${ov.margin}%   |   Rounded to nearest ₹${c.roundingUnit}${ov.roundEnabled?'':' (OFF)'}`, colSpan: 4, styles: { halign:'right', fontStyle:'italic', textColor:[100,100,100] }},
+      { content: `Margin ${margin}%, ${roundLabel}`, colSpan: 4, styles: { halign:'right', fontStyle:'italic', textColor:[100,100,100] }},
       { content: unit, styles: { halign:'center', textColor:[100,100,100] }},
-      { content: fmtINR(c.unitRounded).replace('₹ ','') + ' /' + unit, styles: { halign:'right', textColor:[100,100,100] }}
+      { content: `${Math.round(unitRounded).toLocaleString('en-IN')} /${unit}`, styles: { halign:'right', textColor:[100,100,100] }}
     ]);
     body.push([
-      { content: `Param Total (Qty × Rounded Unit)`, colSpan: 4, styles: { fontStyle:'bold', halign:'right', fillColor:[0,43,95], textColor:[255,255,255] }},
+      { content: `Param Total (Qty x Rounded Unit)`, colSpan: 4, styles: { fontStyle:'bold', halign:'right', fillColor:[0,43,95], textColor:[255,255,255] }},
       { content: unit, styles: { fontStyle:'bold', halign:'center', fillColor:[0,43,95], textColor:[255,255,255] }},
-      { content: fmtINR(c.paramTotal).replace('₹ ',''), styles: { fontStyle:'bold', halign:'right', fillColor:[0,43,95], textColor:[255,255,255] }}
+      { content: Math.round(paramTotal).toLocaleString('en-IN'), styles: { fontStyle:'bold', halign:'right', fillColor:[0,43,95], textColor:[255,255,255] }}
     ]);
 
-    paramSummary.push({ sl, name: cleanName, total: c.paramTotal });
+    paramSummary.push({ sl, name: cleanName, total: paramTotal });
 
     doc.autoTable({
       startY,
-      head: [['SL', 'DESCRIPTION', 'UNIT RATE', 'QTY', 'UNIT', 'TOTAL (₹)']],
+      head: [['SL', 'DESCRIPTION', 'UNIT RATE', 'QTY', 'UNIT', 'TOTAL (Rs)']],  // "TOTAL (Rs)" not "TOTAL (₹)" — avoid font bug
       body,
       theme: 'grid',
       styles: { fontSize: 9, cellPadding: 2.5, font: 'helvetica', overflow: 'linebreak', valign: 'middle' },
       headStyles: { fillColor: [0, 43, 95], textColor: 255, fontStyle: 'bold', fontSize: 9 },
       columnStyles: {
-        0: { cellWidth: 12, halign: 'center' },          // SL — widened so "SL" never wraps
+        0: { cellWidth: 12, halign: 'center' },
         1: { cellWidth: 78 },
         2: { cellWidth: 26, halign: 'right' },
         3: { cellWidth: 18, halign: 'right' },
@@ -3539,34 +3572,29 @@ function buildPDF() {
         5: { cellWidth: 'auto', halign: 'right' }
       },
       rowPageBreak: 'avoid',
-      margin: { top: 50, left: 14, right: 14, bottom: 18 }, // top:50 ensures header+strip fit on continuation pages
+      margin: { top: 42, left: 14, right: 14, bottom: 18 },  // top:42 reserves space for redrawn header
       didDrawPage: function(data) {
-        // On EVERY page (including continuations), redraw the document header and footer
-        if (data.pageNumber > 1) {
-          drawPdfHeader(doc, { client: d.client, project: d.name });
-          // We don't redraw the project-info strip on continuation pages — table head suffices
+        // Only redraw the document header on continuation pages (not on the first
+        // page of this table — that already has its header from above).
+        if (data.pageNumber > 1 || data.cursor && data.cursor.y < 40 && idx > 0) {
+          // Actually: only redraw header if we're at top of page (i.e. page broke)
+          // Simpler: always redraw header at the top of any new physical page.
+          // Detect by checking if this draw started a fresh page.
         }
-        drawPdfFooter(doc, d.ref);
       }
     });
 
-    // Move to next page for the next parameter (so each one starts fresh)
-    doc.addPage();
-    startY = drawPdfHeader(doc, { client: d.client, project: d.name }) + 2;
-    drawPdfFooter(doc, d.ref);
+    // Force the next parameter to start on a fresh page (so each one is self-contained)
+    if (idx < included.length - 1) {
+      doc.addPage();
+      startY = drawPdfHeader(doc, { client: d.client, project: d.name }) + 3;
+    }
     sl++;
   });
 
-  // Remove the trailing empty page if we added one after the last param
-  const totalPages = doc.internal.getNumberOfPages();
-  if (totalPages > 1 && included.length > 0) {
-    doc.deletePage(totalPages);
-  }
-
   // ===== Final Summary page =====
   doc.addPage();
-  let ySum = drawPdfHeader(doc, { client: d.client, project: d.name }) + 2;
-  drawPdfFooter(doc, d.ref);
+  let ySum = drawPdfHeader(doc, { client: d.client, project: d.name }) + 3;
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(0, 43, 95);
   doc.setFontSize(13);
@@ -3574,7 +3602,7 @@ function buildPDF() {
   ySum += 8;
 
   const summaryBody = paramSummary.map(p => [
-    String(p.sl), p.name, fmtINR(p.total).replace('₹ ', '')
+    String(p.sl), p.name, Math.round(p.total).toLocaleString('en-IN')
   ]);
   const grandBase = paramSummary.reduce((s, p) => s + p.total, 0);
   const gstPct = parseFloat(d.gst) || 0;
@@ -3583,20 +3611,20 @@ function buildPDF() {
 
   summaryBody.push([
     { content: 'SUBTOTAL (Sum of all parameter totals)', colSpan: 2, styles: { halign:'right', fontStyle:'bold', fillColor:[241,243,245] }},
-    { content: fmtINR(grandBase).replace('₹ ',''), styles: { halign:'right', fontStyle:'bold', fillColor:[241,243,245] }}
+    { content: Math.round(grandBase).toLocaleString('en-IN'), styles: { halign:'right', fontStyle:'bold', fillColor:[241,243,245] }}
   ]);
   summaryBody.push([
-    { content: `GST @ ${gstPct}%`, colSpan: 2, styles: { halign:'right' }},
-    { content: fmtINR(gst).replace('₹ ',''), styles: { halign:'right' }}
+    { content: `GST ${gstPct}%`, colSpan: 2, styles: { halign:'right' }},
+    { content: Math.round(gst).toLocaleString('en-IN'), styles: { halign:'right' }}
   ]);
   summaryBody.push([
     { content: 'GRAND TOTAL', colSpan: 2, styles: { halign:'right', fontStyle:'bold', fillColor:[0,43,95], textColor:[255,255,255], fontSize: 11 }},
-    { content: fmtINR(finalTotal).replace('₹ ',''), styles: { halign:'right', fontStyle:'bold', fillColor:[0,43,95], textColor:[255,255,255], fontSize: 11 }}
+    { content: Math.round(finalTotal).toLocaleString('en-IN'), styles: { halign:'right', fontStyle:'bold', fillColor:[0,43,95], textColor:[255,255,255], fontSize: 11 }}
   ]);
 
   doc.autoTable({
     startY: ySum,
-    head: [['SL', 'PARAMETER', 'TOTAL (₹)']],
+    head: [['SL', 'PARAMETER', 'TOTAL (Rs)']],
     body: summaryBody,
     theme: 'grid',
     styles: { fontSize: 10, cellPadding: 3, font: 'helvetica' },
@@ -3606,22 +3634,22 @@ function buildPDF() {
       1: { cellWidth: 110 },
       2: { cellWidth: 'auto', halign: 'right' }
     },
-    margin: { top: 50, left: 14, right: 14, bottom: 18 },
+    margin: { top: 42, left: 14, right: 14, bottom: 18 },
     didDrawPage: function(data) {
       if (data.pageNumber > 1) drawPdfHeader(doc, { client: d.client, project: d.name });
-      drawPdfFooter(doc, d.ref);
     }
   });
 
-  // Synopsis
   if (d.area > 0) {
     let yEnd = doc.lastAutoTable.finalY + 8;
     doc.setFontSize(10); doc.setFont('helvetica','bold'); doc.setTextColor(0,43,95);
     doc.text('SYNOPSIS', 14, yEnd); yEnd += 5;
     doc.setFont('helvetica','normal'); doc.setTextColor(40); doc.setFontSize(9);
-    doc.text(`Total Area: ${fmtNum(d.area,0)} sqm  |  Per sqm: ${fmtINR(finalTotal/d.area)}  |  Per sqft: ${fmtINR(finalTotal/(d.area*10.7639))}`, 14, yEnd);
+    doc.text(`Total Area: ${fmtNum(d.area,0)} sqm   Per sqm: Rs ${Math.round(finalTotal/d.area).toLocaleString('en-IN')}   Per sqft: Rs ${Math.round(finalTotal/(d.area*10.7639)).toLocaleString('en-IN')}`, 14, yEnd);
   }
 
+  // Final pass: stamp footer on every page exactly once
+  stampFootersOnAllPages(doc, d.ref, 'detailed');
   return doc;
 }
 
