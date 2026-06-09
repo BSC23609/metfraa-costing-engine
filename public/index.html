@@ -135,6 +135,7 @@ body { font-family: 'Segoe UI', Tahoma, sans-serif; background: var(--brand-grey
   <div class="app-title">METFRAA Costing Engine</div>
   <div class="app-header-actions">
     <button class="app-header-btn" id="refreshBtn" onclick="refreshDB()" title="Reload master data from OneDrive">⟳ Refresh</button>
+    <button class="app-header-btn" id="projectsBtn" onclick="navProjects()" title="View saved projects and their revisions">📁 Projects</button>
     <button class="app-header-btn" id="settingsBtn" onclick="navSettings()">⚙ Settings</button>
     <img class="brand-logo" id="brandLogo" src="Metfraa.png" alt="METFRAA" onerror="this.style.display='none'">
   </div>
@@ -302,7 +303,7 @@ body { font-family: 'Segoe UI', Tahoma, sans-serif; background: var(--brand-grey
   <div class="modal" style="min-width:640px; max-width:820px; max-height:88vh; overflow-y:auto;">
     <h3>Add New Parameter</h3>
     <p style="font-size:12px; color:#666; margin-bottom:14px;">Creates a new costing parameter at the end of the materials list. Tick subcategories and add their options inline. Everything is optional — you can save with placeholders and fill in later from ⚙ Settings.</p>
-    <div style="display:grid; grid-template-columns: 2fr 1fr; gap:12px; margin-bottom:14px;">
+    <div style="display:grid; grid-template-columns: 2fr 1fr 1.4fr; gap:12px; margin-bottom:14px;">
       <div class="form-field" style="margin:0;">
         <label class="form-label">Parameter Name</label>
         <input type="text" id="newParamName" class="form-input" placeholder="e.g. Mezzanine Flooring">
@@ -315,6 +316,13 @@ body { font-family: 'Segoe UI', Tahoma, sans-serif; background: var(--brand-grey
           <option value="rmt">rmt (running metres)</option>
           <option value="nos">nos (count)</option>
         </select>
+      </div>
+      <div class="form-field" style="margin:0;">
+        <label class="form-label">Rounding Unit <span style="color:#999;font-size:10px;">(per-param)</span></label>
+        <div style="display:flex; gap:14px; padding-top:6px; font-size:13px;">
+          <label style="cursor:pointer;"><input type="radio" name="newParamRounding" value="100" checked> ₹100</label>
+          <label style="cursor:pointer;"><input type="radio" name="newParamRounding" value="10"> ₹10</label>
+        </div>
       </div>
     </div>
 
@@ -385,8 +393,10 @@ body { font-family: 'Segoe UI', Tahoma, sans-serif; background: var(--brand-grey
 <div class="wizard-steps" id="wizardSteps">
     <div id="step1-ind" class="step-indicator active">1. Project Info</div>
     <div id="step2-ind" class="step-indicator">2. Build Cost</div>
-    <div id="step3-ind" class="step-indicator">3. Preview</div>
-    <div id="step4-ind" class="step-indicator">4. Save & Download</div>
+    <div id="step3-ind" class="step-indicator">3. Margin & Round</div>
+    <div id="step4-ind" class="step-indicator">4. Grand Total</div>
+    <div id="step5-ind" class="step-indicator">5. Preview</div>
+    <div id="step6-ind" class="step-indicator">6. Save</div>
 </div>
 
 <main class="main">
@@ -402,7 +412,10 @@ body { font-family: 'Segoe UI', Tahoma, sans-serif; background: var(--brand-grey
     </div>
 
     <div class="card">
-      <div class="section-title">Project Identification</div>
+      <div class="section-title" style="display:flex; justify-content:space-between; align-items:center;">
+        <span>Project Identification</span>
+        <button class="btn btn-secondary" onclick="startNewQuote()" style="font-size:12px; padding:6px 14px;" title="Clear everything and start a fresh quote">📄 New Quote</button>
+      </div>
       <div class="form-grid">
         <div class="form-field"><label class="form-label">Quotation Ref</label><input type="text" id="projRef" class="form-input" placeholder="Met/est/2026/01"></div>
         <div class="form-field"><label class="form-label">Date</label><input type="date" id="projDate" class="form-input"></div>
@@ -456,7 +469,7 @@ body { font-family: 'Segoe UI', Tahoma, sans-serif; background: var(--brand-grey
       <div style="font-size:12px; color:#6c757d; margin-bottom:12px;">
         Enter the quantity for each parameter. Blank quantities = that parameter won't appear in the final quotation.
       </div>
-      <div id="qtyTable" style="display:grid; grid-template-columns:1fr 140px 60px; gap:8px 14px; align-items:center; font-size:13px;">
+      <div id="qtyTable" style="display:grid; grid-template-columns:48px 1fr 140px 60px; gap:8px 14px; align-items:center; font-size:13px;">
         <em style="color:#aaa; grid-column:1/-1;">— loading parameters from master sheet —</em>
       </div>
 
@@ -487,51 +500,140 @@ body { font-family: 'Segoe UI', Tahoma, sans-serif; background: var(--brand-grey
         </div>
         <table class="report-table">
           <thead>
-            <tr><th>SUBCATEGORY</th><th>SELECTION</th><th width="110">RATE / %</th><th width="90">QTY</th><th width="120">TOTAL</th><th width="140">REMARK</th></tr>
+            <tr><th>SUBCATEGORY</th><th>SELECTION</th><th width="140">REMARK</th></tr>
           </thead>
           <tbody id="builderBody"></tbody>
           <tfoot>
             <tr class="row-total">
-              <td colspan="4" style="text-align:right">CATEGORY UNIT RATE</td>
-              <td id="paramUnitRateDisplay" class="cell-num">₹ 0</td>
-              <td></td>
-            </tr>
-            <tr class="row-total">
-              <td colspan="4" style="text-align:right">CATEGORY TOTAL (Unit × Qty)</td>
-              <td id="paramTotalDisplay" class="cell-num">₹ 0</td>
-              <td></td>
+              <td colspan="2" style="text-align:right; font-size:14px;">PARAMETER TOTAL</td>
+              <td id="paramTotalDisplay" class="cell-num" style="font-size:14px; font-weight:700;">₹ 0</td>
             </tr>
           </tfoot>
         </table>
         <div id="rmSumWarning" style="display:none; margin-top:12px; padding:8px 12px; background:#fff3cd; border:1px solid #ffe69c; border-radius:6px; font-size:12px; color:#856404;"></div>
         <div id="paramHelp" style="margin-top:14px; font-size:12px; color:#6c757d;">
-          <strong>How it works:</strong> Each row = a subcategory. RATE rows add ₹ directly per unit. PERCENT rows (Wastages, Overlap) apply % to RAW MATERIAL / SHEET COST cost. The "Qty" applies to the whole parameter — it's the same for every row.
+          <strong>How it works:</strong> Pick an option for each subcategory. Rates aren't shown here — they're applied behind the scenes. Only the Parameter Total at the bottom reflects all your selections.
+        </div>
+        <!-- Back / Next nav between parameters -->
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-top:16px; padding-top:12px; border-top:1px solid #eee;">
+          <button class="btn btn-secondary" onclick="navParam(-1)" id="paramPrevBtn" style="padding:8px 18px;">◀ Previous Parameter</button>
+          <div id="paramNavStatus" style="font-size:12px; color:#666;"></div>
+          <button class="btn btn-primary" onclick="navParam(1)" id="paramNextBtn" style="padding:8px 18px;">Next Parameter ▶</button>
         </div>
       </div>
     </div>
-    <div class="btn-row"><button class="btn btn-secondary" onclick="goToPage(1)">◀ Back</button><button class="btn btn-primary" onclick="generatePreview(); goToPage(3)">Preview ➔</button></div>
+    <div class="btn-row"><button class="btn btn-secondary" onclick="goToPage(1)">◀ Back to Step 1</button><button class="btn btn-primary" onclick="prepareStep3(); goToPage(3)">Continue to Margin & Rounding ➔</button></div>
   </div>
 
   <!-- PAGE 3 -->
+  <!-- PAGE 3 — Margin & Rounding (per parameter) -->
   <div id="page3" class="page">
-    <div id="previewArea"></div>
-    <div class="btn-row"><button class="btn btn-secondary" onclick="goToPage(2)">◀ Edit</button><button class="btn btn-primary" onclick="goToPage(4)">Confirm ➔</button></div>
+    <div class="card">
+      <div class="section-title">Step 3 — Margin & Round-up</div>
+      <p style="font-size:13px; color:#666; margin-bottom:12px;">
+        Adjust margin per parameter (defaults from Step 1) and toggle rounding. Rounding is applied to the post-margin <strong>unit cost</strong> per parameter — to the nearest ₹100 for structural members, nearest ₹10 for sheets/light items (set in the master sheet).
+      </p>
+      <div id="step3Grid"></div>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-secondary" onclick="goToPage(2)">◀ Back to Step 2</button>
+      <button class="btn btn-primary" onclick="prepareStep4(); goToPage(4)">Continue to Grand Total ➔</button>
+    </div>
   </div>
 
-  <!-- PAGE 4 -->
+  <!-- PAGE 4 — Grand Total summary -->
   <div id="page4" class="page">
+    <div class="card">
+      <div class="section-title">Step 4 — Grand Total</div>
+      <div id="step4Grid"></div>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-secondary" onclick="goToPage(3)">◀ Back to Margin</button>
+      <button class="btn btn-primary" onclick="generatePreview(); goToPage(5)">Preview ➔</button>
+    </div>
+  </div>
+
+  <!-- PAGE 5 — Preview (was page3) -->
+  <div id="page5" class="page">
+    <div id="previewArea"></div>
+    <div class="btn-row"><button class="btn btn-secondary" onclick="goToPage(4)">◀ Back</button><button class="btn btn-primary" onclick="goToPage(6)">Confirm ➔</button></div>
+  </div>
+
+  <!-- PAGE 6 — Export (was page4) -->
+  <div id="page6" class="page">
     <div class="card">
       <div class="section-title">Export Options</div>
       <div class="export-grid">
         <div class="export-card" onclick="downloadExcel()">📊<h3>Download Excel</h3></div>
         <div class="export-card" onclick="downloadPDF()">📄<h3>Download PDF</h3></div>
         <div class="export-card" id="saveBtn" onclick="saveToOneDrive()">☁️<h3>Save PDF + JSON to OneDrive</h3></div>
+        <div class="export-card" onclick="openCustomerQuote()" style="border:2px solid var(--brand-secondary);">📋<h3>Create Customer Quote</h3></div>
       </div>
       <div style="margin-top:20px; padding:14px; background:#f0f7ff; border-left:4px solid var(--brand-secondary); font-size:13px; color:#495057; border-radius:4px;">
-        <strong>💡 OneDrive Save:</strong> Saves the PDF to <code>Generated_Costings/PDF/</code> and a JSON copy to <code>Generated_Costings/JSON/</code> for future editing. Filename format: <code>{ProjectName}_{Date}.pdf/json</code>
+        <strong>💡 OneDrive Save:</strong> Saves to <code>Generated_Costings/&lt;Client&gt;_&lt;Project&gt;/</code> with PDF/ and JSON/ subfolders. Each save becomes the next revision (R1, R2, ...).<br>
+        <strong>📋 Customer Quote:</strong> Generates the Annexure-D style Bill of Quantities (one line per parameter with auto-built description) for the client.
       </div>
     </div>
     <div class="btn-row"><button class="btn btn-secondary" onclick="location.reload()">+ New Project</button></div>
+  </div>
+
+  <!-- CUSTOMER QUOTE PAGE -->
+  <div id="pageCustomerQuote" class="page">
+    <div class="card">
+      <div class="section-title">
+        <span>📋 Customer Quote (Annexure-D)</span>
+        <button class="btn btn-secondary" onclick="goToPage(6)" style="font-size:11px; padding:5px 12px;">◀ Back to Export</button>
+      </div>
+      <p style="font-size:12px; color:#666; margin-bottom:12px;">
+        Descriptions are auto-generated from your Step 2 selections. Click any description to edit it before saving.
+      </p>
+      <div id="customerQuoteBody"></div>
+      <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:20px;">
+        <button class="btn btn-secondary" onclick="downloadCustomerQuotePDF()" style="padding:8px 18px;">⬇ Download PDF</button>
+        <button class="btn btn-primary" onclick="saveCustomerQuoteToCloud()" id="saveCQBtn" style="padding:8px 18px;">☁ Save & Upload to OneDrive</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- PROJECTS PAGE (revision viewer) -->
+  <div id="pageProjects" class="page">
+    <div class="card">
+      <div class="section-title">
+        <span>📁 Saved Projects</span>
+        <button class="btn btn-secondary" onclick="loadProjectsList()" style="font-size:11px; padding:5px 12px;">⟳ Refresh</button>
+      </div>
+      <p style="font-size:12px; color:#666; margin-bottom:10px;">Each project is a folder in OneDrive containing PDF and JSON versions of every saved revision.</p>
+      <div id="projectsListContainer">
+        <em style="color:#888;">Loading…</em>
+      </div>
+    </div>
+    <div class="btn-row"><button class="btn btn-secondary" onclick="goToPage(1)">◀ Back to Step 1</button></div>
+  </div>
+
+  <!-- PROJECT DETAIL PAGE (revisions list for a specific project) -->
+  <div id="pageProjectDetail" class="page">
+    <div class="card">
+      <div class="section-title">
+        <span id="projectDetailTitle">Project Revisions</span>
+        <button class="btn btn-secondary" onclick="navProjects()" style="font-size:11px; padding:5px 12px;">◀ Back to Projects</button>
+      </div>
+      <div id="projectRevisionsContainer">
+        <em style="color:#888;">Loading…</em>
+      </div>
+    </div>
+  </div>
+
+  <!-- REVISION VIEWER PAGE (in-app PDF preview / details) -->
+  <div id="pageRevisionViewer" class="page">
+    <div class="card">
+      <div class="section-title">
+        <span id="revisionViewerTitle">Revision Viewer</span>
+        <button class="btn btn-secondary" onclick="backToProjectDetail()" style="font-size:11px; padding:5px 12px;">◀ Back to Revisions</button>
+      </div>
+      <div id="revisionViewerBody">
+        <em style="color:#888;">Loading…</em>
+      </div>
+    </div>
   </div>
 
   <!-- SETTINGS PAGE (rate editor) -->
@@ -826,12 +928,14 @@ function renderQtyTable() {
   const c = document.getElementById('qtyTable');
   if (!c) return;
   c.innerHTML = '';
-  // Header row
+  // Header row (4 cols: include checkbox | name | qty | unit)
   c.insertAdjacentHTML('beforeend',
+    '<div style="font-weight:700; font-size:11px; text-transform:uppercase; color:#666; text-align:center;" title="Include in Step 2">Use</div>' +
     '<div style="font-weight:700; font-size:11px; text-transform:uppercase; color:#666;">Parameter</div>' +
     '<div style="font-weight:700; font-size:11px; text-transform:uppercase; color:#666; text-align:right;">Quantity</div>' +
     '<div style="font-weight:700; font-size:11px; text-transform:uppercase; color:#666;">Unit</div>'
   );
+  if (!projectState.included) projectState.included = {};
   let added = 0;
   let serial = 0;
   Object.entries(MASTER_DB).forEach(([pname, node]) => {
@@ -839,9 +943,19 @@ function renderQtyTable() {
     if (isStep1ManagedParam(pname)) return;
     const unit = node.__unit || 'MT';
     const currentQty = projectState.qtys[pname] || '';
+    // Default include: any param with a saved qty > 0, OR explicitly toggled
+    let isIncluded;
+    if (projectState.included[pname] === true || projectState.included[pname] === false) {
+      isIncluded = projectState.included[pname];
+    } else {
+      isIncluded = parseFloat(currentQty) > 0;
+    }
+    projectState.included[pname] = isIncluded;
     const id = 'qty_' + pname.replace(/[^a-z0-9]/gi, '_');
+    const cbId = 'inc_' + pname.replace(/[^a-z0-9]/gi, '_');
     serial++;
     c.insertAdjacentHTML('beforeend', `
+      <div style="text-align:center;"><input type="checkbox" id="${cbId}" ${isIncluded?'checked':''} data-param="${pname.replace(/"/g,'&quot;')}" oninput="onIncludeToggle(this)" title="Include in Step 2"></div>
       <div>${serial}. ${cleanParamLabel(pname)}</div>
       <input type="number" class="form-input" id="${id}" step="0.01" value="${currentQty}" placeholder="0" data-param="${pname.replace(/"/g,'&quot;')}" oninput="onQtyTableInput(this)" style="text-align:right;">
       <div style="color:#888; font-family:monospace;">${unit}</div>
@@ -856,6 +970,28 @@ function renderQtyTable() {
 function onQtyTableInput(input) {
   const param = input.dataset.param;
   projectState.qtys[param] = input.value;
+  // If user enters a qty > 0 on a previously-unchecked param, auto-include it
+  if (parseFloat(input.value) > 0 && projectState.included[param] !== false) {
+    projectState.included[param] = true;
+    const cb = document.getElementById('inc_' + param.replace(/[^a-z0-9]/gi, '_'));
+    if (cb) cb.checked = true;
+  }
+}
+
+function onIncludeToggle(cb) {
+  const param = cb.dataset.param;
+  if (!projectState.included) projectState.included = {};
+  projectState.included[param] = cb.checked;
+}
+
+// Returns the array of parameters the user has included for this quote, in master sheet order.
+function getIncludedParams() {
+  return Object.keys(MASTER_DB).filter(p => {
+    const node = MASTER_DB[p];
+    if (!node || node.__virtual) return false;
+    if (isStep1ManagedParam(p)) return false;
+    return projectState.included && projectState.included[p] === true;
+  });
 }
 
 // =========================================================
@@ -1217,6 +1353,9 @@ function _applySavedQuotation(saved) {
   projectState.qtys = saved.qtys || {};
   projectState.selections = saved.selections || {};
   projectState.siteSpecific = saved.siteSpecific || {};
+  projectState.included = saved.included || {};
+  projectState.step3 = saved.step3 || {};
+  projectState.customerQuote = saved.customerQuote || { descriptions: {} };
 
   renderQtyTable();
   initSidebar();
@@ -1347,12 +1486,15 @@ function closeQuotationPreview() {
 // NAVIGATION
 // =========================================================
 function goToPage(n) {
-  if (n >= 2 && n <= 4) captureProjectDetails();
+  if (n >= 2 && n <= 6) captureProjectDetails();
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.step-indicator').forEach(s => s.classList.remove('active'));
-  document.getElementById('page'+n).classList.add('active');
-  document.getElementById('step'+n+'-ind').classList.add('active');
-  document.getElementById('wizardSteps').style.display = 'flex';
+  const target = document.getElementById('page'+n);
+  if (target) target.classList.add('active');
+  const ind = document.getElementById('step'+n+'-ind');
+  if (ind) ind.classList.add('active');
+  const wizard = document.getElementById('wizardSteps');
+  if (wizard) wizard.style.display = 'flex';
   window.scrollTo(0, 0);
 }
 
@@ -1367,6 +1509,464 @@ function _enterSettings() {
   document.getElementById('wizardSteps').style.display = 'none';
   renderRatesEditor();
   window.scrollTo(0, 0);
+}
+
+// =========================================================
+// PROJECTS / REVISIONS (Build C)
+// =========================================================
+let _currentProject = null;
+let _currentRevision = null;
+
+function navProjects() {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.step-indicator').forEach(s => s.classList.remove('active'));
+  document.getElementById('pageProjects').classList.add('active');
+  document.getElementById('wizardSteps').style.display = 'none';
+  window.scrollTo(0, 0);
+  loadProjectsList();
+}
+
+async function loadProjectsList() {
+  const c = document.getElementById('projectsListContainer');
+  c.innerHTML = '<em style="color:#888;">Loading projects…</em>';
+  try {
+    const res = await fetch(`${RENDER_URL}/api/list-projects`);
+    const data = await res.json();
+    if (!data.success) throw new Error(data.error || 'Failed');
+    if (!data.projects || data.projects.length === 0) {
+      c.innerHTML = '<em style="color:#aaa;">No saved projects yet. Save a quotation from Step 5 to see it here.</em>';
+      return;
+    }
+    let html = `<div style="display:grid; grid-template-columns: 1fr 130px 180px 120px; gap:10px; font-size:12px; font-weight:700; text-transform:uppercase; color:#666; padding:8px 0; border-bottom:2px solid #e9ecef;">
+      <div>Project Folder</div>
+      <div style="text-align:center;">Revisions</div>
+      <div>Last Modified</div>
+      <div style="text-align:right;">Action</div>
+    </div>`;
+    data.projects.forEach(p => {
+      const date = new Date(p.lastModified);
+      const dateStr = isNaN(date.getTime()) ? '—' : date.toLocaleString('en-IN', { dateStyle:'medium', timeStyle:'short' });
+      const projectSafe = p.name.replace(/'/g,"\\'");
+      html += `<div style="display:grid; grid-template-columns: 1fr 130px 180px 120px; gap:10px; align-items:center; font-size:13px; padding:10px 0; border-bottom:1px solid #f3f3f3;">
+        <div style="font-weight:600;">${escapeHtml(p.name)}</div>
+        <div style="text-align:center;"><span style="background:#e9ecef; padding:2px 10px; border-radius:12px; font-size:11px;">${p.revisionCount}</span></div>
+        <div style="color:#666; font-size:12px;">${dateStr}</div>
+        <div style="text-align:right;"><button class="btn btn-primary" style="font-size:11px; padding:5px 12px;" onclick="openProjectRevisions('${projectSafe}')">View Revisions →</button></div>
+      </div>`;
+    });
+    c.innerHTML = html;
+  } catch (e) {
+    c.innerHTML = `<div style="color:#dc3545;">❌ ${e.message}</div>`;
+  }
+}
+
+async function openProjectRevisions(projectFolder) {
+  _currentProject = projectFolder;
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.getElementById('pageProjectDetail').classList.add('active');
+  document.getElementById('projectDetailTitle').innerText = projectFolder;
+  const c = document.getElementById('projectRevisionsContainer');
+  c.innerHTML = '<em style="color:#888;">Loading revisions…</em>';
+  try {
+    const res = await fetch(`${RENDER_URL}/api/list-project-revisions?project=${encodeURIComponent(projectFolder)}`);
+    const data = await res.json();
+    if (!data.success) throw new Error(data.error || 'Failed');
+    if (!data.revisions || data.revisions.length === 0) {
+      c.innerHTML = '<em style="color:#aaa;">No revisions found.</em>';
+      return;
+    }
+    let html = `<div style="display:grid; grid-template-columns: 60px 1fr 180px 100px 230px; gap:10px; font-size:12px; font-weight:700; text-transform:uppercase; color:#666; padding:8px 0; border-bottom:2px solid #e9ecef;">
+      <div style="text-align:center;">Rev</div>
+      <div>File Name</div>
+      <div>Saved On</div>
+      <div style="text-align:center;">JSON</div>
+      <div style="text-align:right;">Actions</div>
+    </div>`;
+    data.revisions.forEach(r => {
+      const date = new Date(r.lastModified);
+      const dateStr = isNaN(date.getTime()) ? '—' : date.toLocaleString('en-IN', { dateStyle:'medium', timeStyle:'short' });
+      const revSafe = r.name.replace(/'/g,"\\'");
+      const revLabel = r.revisionNumber === 0 ? 'R0' : `R${r.revisionNumber}`;
+      const loadBtn = r.hasJson
+        ? `<button class="btn btn-warn" style="font-size:11px; padding:5px 10px;" onclick="loadRevisionAsEditable('${revSafe}')">✎ Load as new revision</button>`
+        : '<span style="color:#999; font-size:11px;">no json</span>';
+      html += `<div style="display:grid; grid-template-columns: 60px 1fr 180px 100px 230px; gap:10px; align-items:center; font-size:13px; padding:10px 0; border-bottom:1px solid #f3f3f3;">
+        <div style="text-align:center;"><span style="background:var(--brand-primary); color:white; padding:3px 10px; border-radius:4px; font-weight:600; font-size:11px;">${revLabel}</span></div>
+        <div style="font-family:monospace; font-size:12px; color:#444;">${escapeHtml(r.name)}</div>
+        <div style="color:#666; font-size:12px;">${dateStr}</div>
+        <div style="text-align:center;">${r.hasJson ? '✅' : '—'}</div>
+        <div style="text-align:right; display:flex; gap:6px; justify-content:flex-end;">
+          <button class="btn btn-secondary" style="font-size:11px; padding:5px 10px;" onclick="viewRevision('${revSafe}')">👁 View</button>
+          ${loadBtn}
+        </div>
+      </div>`;
+    });
+    c.innerHTML = html;
+  } catch (e) {
+    c.innerHTML = `<div style="color:#dc3545;">❌ ${e.message}</div>`;
+  }
+}
+
+function escapeHtml(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+async function viewRevision(revisionName) {
+  _currentRevision = revisionName;
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.getElementById('pageRevisionViewer').classList.add('active');
+  document.getElementById('revisionViewerTitle').innerText = `Viewing: ${revisionName}`;
+  const body = document.getElementById('revisionViewerBody');
+  body.innerHTML = '<em style="color:#888;">Loading PDF…</em>';
+  try {
+    const res = await fetch(`${RENDER_URL}/api/get-project-revision-pdf?project=${encodeURIComponent(_currentProject)}&revision=${encodeURIComponent(revisionName)}`);
+    const data = await res.json();
+    if (!data.success) throw new Error(data.error || 'Failed');
+    body.innerHTML = `
+      <div style="margin-bottom:10px; display:flex; gap:8px;">
+        <a href="data:application/pdf;base64,${data.base64}" download="${revisionName}.pdf" class="btn btn-primary" style="text-decoration:none; padding:6px 14px; font-size:12px;">⬇ Download PDF</a>
+        <button class="btn btn-warn" style="padding:6px 14px; font-size:12px;" onclick="loadRevisionAsEditable('${revisionName.replace(/'/g,"\\'")}')">✎ Load as new revision</button>
+      </div>
+      <iframe src="data:application/pdf;base64,${data.base64}" style="width:100%; height:75vh; border:1px solid #ddd;"></iframe>
+    `;
+  } catch (e) {
+    body.innerHTML = `<div style="color:#dc3545;">❌ ${e.message}</div>`;
+  }
+}
+
+function backToProjectDetail() {
+  if (_currentProject) openProjectRevisions(_currentProject);
+  else navProjects();
+}
+
+async function loadRevisionAsEditable(revisionName) {
+  if (!_currentProject) { toast('No project selected', 'err'); return; }
+  if (!confirm(`Load revision "${revisionName}" into the costing app?\n\nYour current unsaved work will be replaced. The next save will become the next revision (R+1) under this project.`)) return;
+  try {
+    const res = await fetch(`${RENDER_URL}/api/get-project-revision?project=${encodeURIComponent(_currentProject)}&revision=${encodeURIComponent(revisionName)}`);
+    const data = await res.json();
+    if (!data.success) throw new Error(data.error || 'Failed');
+    const saved = data.data;
+    if (!saved || !saved.details) throw new Error('Saved JSON is missing project details');
+    _applySavedQuotation(saved);
+    toast(`✏ Loaded "${revisionName}" — make edits then Save to create the next revision`, 'ok', 5000);
+    goToPage(1);
+  } catch (e) {
+    toast('❌ ' + e.message, 'err', 5000);
+  }
+}
+
+// =========================================================
+// CUSTOMER QUOTE (Build D) — Annexure-D style BoQ
+// =========================================================
+
+// Auto-generate a customer-facing description for a parameter, based on its
+// selections. We pick the most "narrative" subcategories (RM material(s), finish,
+// installation) and weave them into a single sentence.
+function buildAutoDescription(pName) {
+  const sel = projectState.selections[pName] || {};
+  const cleanName = cleanParamLabel(pName);
+  const parts = [];
+
+  // RM material(s)
+  if (sel['RM COST'] && Array.isArray(sel['RM COST'].rms) && sel['RM COST'].rms.length > 0) {
+    const rmNames = sel['RM COST'].rms.map(r => r.name).filter(Boolean);
+    if (rmNames.length > 0) parts.push(`using ${rmNames.join(' / ')}`);
+  }
+
+  // Finishing / paint
+  const finishKey = Object.keys(sel).find(k => k.toUpperCase().trim() === 'FINISHING');
+  if (finishKey && sel[finishKey] && sel[finishKey].name && !isAbsenceName(sel[finishKey].name)) {
+    parts.push(`including ${sel[finishKey].name}`);
+  }
+
+  // Shot blast
+  const sbKey = Object.keys(sel).find(k => k.toUpperCase().trim() === 'SHOT BLAST');
+  if (sbKey && sel[sbKey] && sel[sbKey].name && !isAbsenceName(sel[sbKey].name)) {
+    parts.push(`with ${sel[sbKey].name} surface preparation`);
+  }
+
+  // Fixtures / hardware
+  const fxKey = Object.keys(sel).find(k => k.toUpperCase().trim() === 'FIXTURES / HARDWARE');
+  if (fxKey && sel[fxKey] && sel[fxKey].name && !isAbsenceName(sel[fxKey].name)) {
+    parts.push(`including fasteners (${sel[fxKey].name})`);
+  }
+
+  // Suffix
+  const suffix = 'complete as per approved drawings and specifications.';
+
+  if (parts.length === 0) {
+    return `Charges for supply, fabrication, and erection of ${cleanName}, ${suffix}`;
+  }
+  return `Charges for supply, fabrication, and erection of ${cleanName} ${parts.join(', ')}, ${suffix}`;
+}
+
+function isAbsenceName(name) {
+  if (!name) return true;
+  const s = String(name).trim().toLowerCase();
+  return /^(nil|na|n\/a|none|not\s+(included|available|applicable)|without|no\s*\w*|-|0)$/i.test(s) || s === '';
+}
+
+// Build the customer-quote line rows (one per parameter).
+// Returns [{ sNo, description (editable), qty, uom, rate, value }]
+function buildCustomerQuoteRows() {
+  captureProjectDetails();
+  injectVirtualParameters();
+  ensureStep3Overrides();
+  const included = getIncludedParams().filter(p => (parseFloat(projectState.qtys[p])||0) > 0);
+  // Restore any user-edited descriptions from state
+  if (!projectState.customerQuote) projectState.customerQuote = { descriptions: {} };
+  return included.map((p, i) => {
+    const node = MASTER_DB[p];
+    const unit = (node && node.__unit) || 'MT';
+    const uom = unit === 'MT' ? 'MT' : (unit === 'sqm' ? 'SM' : (unit === 'rmt' ? 'RM' : unit.toUpperCase()));
+    const c = computeStep3ForParam(p);
+    const userDesc = projectState.customerQuote.descriptions[p];
+    return {
+      param: p,
+      sNo: i + 1,
+      description: (userDesc != null && userDesc !== '') ? userDesc : buildAutoDescription(p),
+      qty: c.qty,
+      uom,
+      rate: c.unitRounded,
+      value: c.paramTotal
+    };
+  });
+}
+
+function openCustomerQuote() {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.getElementById('pageCustomerQuote').classList.add('active');
+  document.getElementById('wizardSteps').style.display = 'none';
+  renderCustomerQuote();
+  window.scrollTo(0,0);
+}
+
+function renderCustomerQuote() {
+  const d = projectState.details || {};
+  const rows = buildCustomerQuoteRows();
+  const subtotal = rows.reduce((s, r) => s + r.value, 0);
+  const cgst = subtotal * 0.09;
+  const sgst = subtotal * 0.09;
+  const total = subtotal + cgst + sgst;
+  const roundedTotal = Math.round(total);
+  const roundOff = roundedTotal - total;
+
+  // Build HTML
+  let html = `
+    <div style="border:1px solid #ddd; padding:14px 18px; margin-bottom:14px; background:#fafafa; border-radius:6px;">
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; font-size:13px;">
+        <div><strong>Date:</strong> ${d.date || '—'}</div>
+        <div><strong>Quote No:</strong> ${d.ref || '—'}</div>
+        <div><strong>Client:</strong> ${escapeHtml(d.client || '—')}</div>
+        <div><strong>Project:</strong> ${escapeHtml(d.name || '—')}</div>
+      </div>
+    </div>
+
+    <table style="width:100%; border-collapse:collapse; font-size:12px;">
+      <thead>
+        <tr style="background:#002b5f; color:white;">
+          <th style="padding:8px; border:1px solid #002b5f; width:40px;">S No</th>
+          <th style="padding:8px; border:1px solid #002b5f; text-align:left;">Description</th>
+          <th style="padding:8px; border:1px solid #002b5f; width:50px;">UOM</th>
+          <th style="padding:8px; border:1px solid #002b5f; width:80px;">Qty</th>
+          <th style="padding:8px; border:1px solid #002b5f; width:110px;">Rate</th>
+          <th style="padding:8px; border:1px solid #002b5f; width:130px;">Value</th>
+        </tr>
+      </thead>
+      <tbody>`;
+
+  rows.forEach(r => {
+    const paramSafe = r.param.replace(/"/g,'&quot;');
+    html += `
+      <tr>
+        <td style="padding:6px; border:1px solid #ddd; text-align:center; vertical-align:top;">${r.sNo}</td>
+        <td style="padding:6px; border:1px solid #ddd;">
+          <textarea data-cq-desc="${paramSafe}" oninput="onCustomerQuoteDescEdit(this)" style="width:100%; min-height:50px; border:1px dashed #ccc; padding:5px; font-size:12px; font-family:inherit; resize:vertical;">${escapeHtml(r.description)}</textarea>
+        </td>
+        <td style="padding:6px; border:1px solid #ddd; text-align:center; vertical-align:top;">${r.uom}</td>
+        <td style="padding:6px; border:1px solid #ddd; text-align:right; vertical-align:top;">${fmtNum(r.qty, 2)}</td>
+        <td style="padding:6px; border:1px solid #ddd; text-align:right; vertical-align:top; font-family:monospace;">${fmtINR(r.rate)}</td>
+        <td style="padding:6px; border:1px solid #ddd; text-align:right; vertical-align:top; font-family:monospace; font-weight:600;">${fmtINR(r.value)}</td>
+      </tr>`;
+  });
+
+  html += `
+      </tbody>
+      <tfoot>
+        <tr><td colspan="5" style="padding:8px; text-align:right; border:1px solid #ddd; background:#f1f3f5; font-weight:600;">Total Base Value</td><td style="padding:8px; text-align:right; border:1px solid #ddd; background:#f1f3f5; font-weight:700; font-family:monospace;">${fmtINR(subtotal)}</td></tr>
+        <tr><td colspan="5" style="padding:6px 8px; text-align:right; border:1px solid #ddd;">Add: CGST @ 9%</td><td style="padding:6px 8px; text-align:right; border:1px solid #ddd; font-family:monospace;">${fmtINR(cgst)}</td></tr>
+        <tr><td colspan="5" style="padding:6px 8px; text-align:right; border:1px solid #ddd;">Add: SGST @ 9%</td><td style="padding:6px 8px; text-align:right; border:1px solid #ddd; font-family:monospace;">${fmtINR(sgst)}</td></tr>
+        <tr><td colspan="5" style="padding:6px 8px; text-align:right; border:1px solid #ddd;">Round off</td><td style="padding:6px 8px; text-align:right; border:1px solid #ddd; font-family:monospace;">${fmtINR(roundOff)}</td></tr>
+        <tr><td colspan="5" style="padding:10px; text-align:right; border:1px solid #002b5f; background:#002b5f; color:white; font-weight:700;">Net Offer Value</td><td style="padding:10px; text-align:right; border:1px solid #002b5f; background:#002b5f; color:white; font-weight:700; font-family:monospace; font-size:14px;">${fmtINR(roundedTotal)}</td></tr>
+      </tfoot>
+    </table>
+    <div style="margin-top:12px; font-size:11px; color:#888; text-align:center;">Annexure - D - Bill of Quantities &nbsp; | &nbsp; Metfraa Steel Buildings Pvt Ltd</div>
+  `;
+
+  document.getElementById('customerQuoteBody').innerHTML = html;
+  // Save totals to state for PDF building
+  projectState.customerQuoteTotals = { subtotal, cgst, sgst, roundOff, total: roundedTotal };
+}
+
+function onCustomerQuoteDescEdit(ta) {
+  const p = ta.dataset.cqDesc;
+  if (!projectState.customerQuote) projectState.customerQuote = { descriptions: {} };
+  projectState.customerQuote.descriptions[p] = ta.value;
+}
+
+// Build the customer-quote PDF (Annexure-D format)
+function buildCustomerQuotePDF() {
+  const d = projectState.details || {};
+  const rows = buildCustomerQuoteRows();
+  const subtotal = rows.reduce((s, r) => s + r.value, 0);
+  const cgst = subtotal * 0.09;
+  const sgst = subtotal * 0.09;
+  const total = subtotal + cgst + sgst;
+  const roundedTotal = Math.round(total);
+  const roundOff = roundedTotal - total;
+
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+  const pageW = doc.internal.pageSize.getWidth();
+  const pageH = doc.internal.pageSize.getHeight();
+
+  // Header: white band, dark text, logo on left, teal divider
+  doc.setFillColor(255,255,255);
+  doc.rect(0, 0, pageW, 32, 'F');
+  doc.setFillColor(0, 102, 179);
+  doc.rect(0, 32, pageW, 1.5, 'F');
+
+  try {
+    const logo = document.getElementById('brandLogo');
+    if (logo && logo.complete && logo.naturalWidth > 0) {
+      const canvas = document.createElement('canvas');
+      canvas.width = logo.naturalWidth;
+      canvas.height = logo.naturalHeight;
+      canvas.getContext('2d').drawImage(logo, 0, 0);
+      const aspect = logo.naturalWidth / logo.naturalHeight;
+      doc.addImage(canvas.toDataURL('image/png'), 'PNG', 8, 5, 22 * aspect, 22);
+    }
+  } catch(e) {}
+
+  doc.setTextColor(0, 43, 95);
+  doc.setFont('helvetica','bold');
+  doc.setFontSize(14);
+  doc.text('Proposal for Construction of PEB building', pageW / 2, 12, { align: 'center' });
+  doc.setFontSize(11);
+  doc.text(d.client || '—', pageW / 2, 20, { align: 'center' });
+  doc.setFont('helvetica','normal');
+  doc.setFontSize(9);
+  doc.setTextColor(80,80,80);
+  doc.text(d.name || '—', pageW / 2, 26, { align: 'center' });
+
+  // Project bar
+  let y = 40;
+  doc.setTextColor(0,0,0);
+  doc.setFontSize(9);
+  doc.setFont('helvetica','bold');
+  doc.text(`Date:`, 14, y); doc.setFont('helvetica','normal'); doc.text(d.date || '—', 28, y);
+  doc.setFont('helvetica','bold'); doc.text(`Quote No:`, pageW - 90, y);
+  doc.setFont('helvetica','normal'); doc.text(d.ref || '—', pageW - 70, y);
+  y += 5;
+  doc.setFont('helvetica','bold'); doc.text(`Client:`, 14, y); doc.setFont('helvetica','normal'); doc.text(d.client || '—', 28, y);
+  doc.setFont('helvetica','bold'); doc.text(`Location:`, pageW - 90, y);
+  doc.setFont('helvetica','normal'); doc.text(d.loc || '—', pageW - 70, y);
+  y += 8;
+
+  // Table
+  const body = rows.map(r => [
+    String(r.sNo),
+    r.description,
+    r.uom,
+    fmtNum(r.qty, 2),
+    `Rs ${Math.round(r.rate).toLocaleString('en-IN')}`,
+    `Rs ${Math.round(r.value).toLocaleString('en-IN')}`
+  ]);
+
+  body.push([
+    { content: 'Total Base Value', colSpan: 5, styles: { halign:'right', fontStyle:'bold', fillColor:[241,243,245] }},
+    { content: `Rs ${Math.round(subtotal).toLocaleString('en-IN')}`, styles: { halign:'right', fontStyle:'bold', fillColor:[241,243,245] }}
+  ]);
+  body.push([
+    { content: 'Add: CGST @ 9%', colSpan: 5, styles: { halign:'right' }},
+    { content: `Rs ${Math.round(cgst).toLocaleString('en-IN')}`, styles: { halign:'right' }}
+  ]);
+  body.push([
+    { content: 'Add: SGST @ 9%', colSpan: 5, styles: { halign:'right' }},
+    { content: `Rs ${Math.round(sgst).toLocaleString('en-IN')}`, styles: { halign:'right' }}
+  ]);
+  body.push([
+    { content: 'Round off', colSpan: 5, styles: { halign:'right' }},
+    { content: `Rs ${Math.round(roundOff).toLocaleString('en-IN')}`, styles: { halign:'right' }}
+  ]);
+  body.push([
+    { content: 'Net Offer Value', colSpan: 5, styles: { halign:'right', fontStyle:'bold', fillColor:[0,43,95], textColor:[255,255,255], fontSize:11 }},
+    { content: `Rs ${roundedTotal.toLocaleString('en-IN')}`, styles: { halign:'right', fontStyle:'bold', fillColor:[0,43,95], textColor:[255,255,255], fontSize:11 }}
+  ]);
+
+  doc.autoTable({
+    startY: y,
+    head: [['S No', 'Description', 'UOM', 'Qty', 'Rate', 'Value']],
+    body,
+    theme: 'grid',
+    styles: { fontSize: 9, cellPadding: 2.5, font: 'helvetica', overflow: 'linebreak', valign: 'top' },
+    headStyles: { fillColor: [0, 43, 95], textColor: 255, fontStyle: 'bold' },
+    columnStyles: {
+      0: { cellWidth: 10, halign: 'center' },
+      1: { cellWidth: 88 },
+      2: { cellWidth: 14, halign: 'center' },
+      3: { cellWidth: 18, halign: 'right' },
+      4: { cellWidth: 26, halign: 'right' },
+      5: { cellWidth: 'auto', halign: 'right' }
+    },
+    rowPageBreak: 'avoid',
+    margin: { left: 14, right: 14, bottom: 18 },
+    didDrawPage: function() {
+      doc.setFontSize(7); doc.setTextColor(120);
+      doc.text(`Annexure - D - Bill of Quantities`, 14, pageH - 8);
+      doc.text(`Metfraa Steel Buildings Pvt Ltd`, pageW - 14, pageH - 8, { align:'right' });
+    }
+  });
+
+  return doc;
+}
+
+function downloadCustomerQuotePDF() {
+  const d = projectState.details || {};
+  const doc = buildCustomerQuotePDF();
+  const filename = `${buildFileBase(d)}_CustomerQuote.pdf`;
+  doc.save(filename);
+}
+
+async function saveCustomerQuoteToCloud() {
+  const d = projectState.details || {};
+  if (!d.name || d.name === '—' || !d.client || d.client === '—') {
+    toast('Project Name and Client are required before saving', 'err'); return;
+  }
+  const btn = document.getElementById('saveCQBtn');
+  btn.disabled = true; btn.innerText = '☁ Saving…';
+  try {
+    const doc = buildCustomerQuotePDF();
+    const pdfBase64 = doc.output('datauristring').split(',')[1];
+    const res = await fetch(`${RENDER_URL}/api/save-customer-quote`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        projectName: d.name,
+        clientName: d.client,
+        date: d.date,
+        pdfBase64
+      })
+    });
+    const data = await res.json();
+    if (!data.success) throw new Error(data.error || 'Failed');
+    toast(`☁ Saved as ${data.fileName}`, 'ok', 5000);
+  } catch (e) {
+    toast('❌ ' + e.message, 'err', 6000);
+  } finally {
+    btn.disabled = false; btn.innerText = '☁ Save & Upload to OneDrive';
+  }
 }
 
 function computeTotalTonnage() {
@@ -1448,11 +2048,14 @@ function initSidebar() {
   const sb = document.getElementById('sidebar');
   sb.innerHTML = '';
   let serial = 0;
+  const includedSet = new Set(getIncludedParams());
   Object.keys(MASTER_DB).forEach(p => {
     // Skip virtual parameters (legacy)
     if (MASTER_DB[p] && MASTER_DB[p].__virtual) return;
     // Skip parameters managed entirely on Step 1 (Distance variants, Paint, Erection Safety/Height)
     if (isStep1ManagedParam(p)) return;
+    // Skip parameters the user didn't include on Step 1
+    if (includedSet.size > 0 && !includedSet.has(p)) return;
     if (!projectState.selections[p]) projectState.selections[p] = {};
     if (projectState.qtys[p] === undefined) projectState.qtys[p] = '';
     serial++;
@@ -1466,6 +2069,13 @@ function initSidebar() {
   if (sb.firstChild) {
     const firstParam = sb.firstChild.dataset.param;
     loadWorkspace(firstParam, sb.firstChild);
+  } else {
+    // No params included — show a hint
+    sb.innerHTML = '<div style="padding:20px; font-size:12px; color:#888; font-style:italic;">No parameters included. Go back to Step 1 and tick the parameters you want to cost.</div>';
+    const titleEl = document.getElementById('activeTitle');
+    if (titleEl) titleEl.innerText = 'Select parameters on Step 1';
+    const body = document.getElementById('builderBody');
+    if (body) body.innerHTML = '';
   }
   refreshSidebarStatus();
 }
@@ -1486,7 +2096,7 @@ function refreshSidebarStatus() {
 const SUBCAT_ORDER = [
   'RM COST', 'WASTAGES / OVERLAP', 'TRANSPORT OUTWARD',
   'FIXED CHARGES (CONVERSION)', 'FIXED CHARGES (DESIGN)', 'SHOT BLAST',
-  'FINISHING', 'FIXING / ERECTION', 'FIXTURES / HARDWARE', 'ACCESSORIES'
+  'FINISHING', 'FIXING / ERECTION', 'FIXTURES / HARDWARE', 'FIXING CHARGES', 'ACCESSORIES'
 ];
 
 function subcatRank(sub) {
@@ -1542,25 +2152,27 @@ function loadWorkspace(name, el) {
 
   activeP = name;
   document.querySelectorAll('.param-item').forEach(i => i.classList.remove('active'));
-  el.classList.add('active');
+  if (el) el.classList.add('active');
   const unit = MASTER_DB[name].__unit || 'MT';
 
   const titleEl = document.getElementById('activeTitle');
   titleEl.innerHTML = `${cleanParamLabel(name)} <button class="btn btn-primary" style="float:right; padding:6px 12px; font-size:11px;" onclick="showAddRowModal()">+ Add Row</button>`;
   document.getElementById('activeUnitInfo').innerText = `Unit: ${unit}`;
 
-  document.getElementById('paramHelp').innerHTML = `<strong>How it works:</strong> RM COST can have multiple raw materials (use <strong>+ Add RM</strong>) — each with its own quantity. Other rows apply to the parameter quantity. <strong>AUTO</strong> rows (Transport, Finishing, Erection) are pulled from Step 1 and shown read-only. Greyed options are "not available" — set their rate in ⚙ Settings to enable.`;
+  document.getElementById('paramHelp').innerHTML = `<strong>How it works:</strong> Pick an option for each subcategory. RM COST can have multiple raw materials (use <strong>+ Add RM</strong>). Rates are not shown — only the parameter total at the bottom reflects all selections.`;
+
+  // Update nav button state (B2)
+  updateParamNavButtons();
 
   const body = document.getElementById('builderBody');
   body.innerHTML = '';
 
-  // ---- Parameter quantity row ----
+  // ---- Parameter quantity row (3-col: label spans 2, qty input in 3rd col? no — keep qty on this row visible) ----
   const qtyRow = document.createElement('tr');
   qtyRow.style.background = '#fff8e1';
   qtyRow.innerHTML = `
-    <td colspan="3" style="font-weight:bold; color:var(--brand-primary);">PARAMETER QUANTITY (from Step 1; editable)</td>
-    <td><input type="number" class="form-input" id="paramQty" value="${projectState.qtys[name]||''}" step="0.01" placeholder="0"></td>
-    <td class="cell-num">${unit}</td>
+    <td style="font-weight:bold; color:var(--brand-primary);">PARAMETER QUANTITY</td>
+    <td><input type="number" class="form-input" id="paramQty" value="${projectState.qtys[name]||''}" step="0.01" placeholder="0" style="max-width:140px;"> <span style="color:#888; margin-left:6px;">${unit}</span></td>
     <td></td>
   `;
   body.appendChild(qtyRow);
@@ -1579,16 +2191,13 @@ function loadWorkspace(name, el) {
     const isAuto = isAutoSubcat(opts);
 
     if (isAuto) {
-      // AUTO row — read-only, value pulled from Step 1 (filled in sync)
+      // AUTO row — read-only marker, rate hidden (computed in sync but not shown)
       const row = document.createElement('tr');
       row.dataset.auto = sub;
       row.style.background = '#f1f8ff';
       row.innerHTML = `
         <td>${sub} <span class="tag-rate" style="background:#cfe2ff;color:#084298;">AUTO</span></td>
         <td class="auto-name" style="font-style:italic; color:#555;">(from Step 1)</td>
-        <td class="cell-num auto-rate">—</td>
-        <td class="cell-num" style="font-style:italic; color:#888">param qty</td>
-        <td class="cell-num auto-line">—</td>
         <td></td>
       `;
       body.appendChild(row);
@@ -1596,8 +2205,9 @@ function loadWorkspace(name, el) {
     }
 
     if (isRM) {
-      // RM COST — one or more RM rows, each with its own qty. Load saved or default to one.
       const savedRMs = (sel['RM COST'] && Array.isArray(sel['RM COST'].rms)) ? sel['RM COST'].rms : [{ id:'', qty:'' }];
+      const paramQtyVal = parseFloat(projectState.qtys[name]) || 0;
+      const isSingleRM = savedRMs.length === 1;
       savedRMs.forEach((rm, idx) => {
         const row = document.createElement('tr');
         row.dataset.rmidx = idx;
@@ -1605,12 +2215,13 @@ function loadWorkspace(name, el) {
         const label = idx === 0 ? 'RM COST' : `RM COST #${idx+1}`;
         const addBtn = idx === 0 ? `<button onclick="addRM()" style="margin-left:6px; border:1px solid var(--brand-primary); background:#fff; color:var(--brand-primary); border-radius:4px; font-size:10px; padding:1px 6px; cursor:pointer;">+ Add RM</button>` : '';
         const delBtn = idx > 0 ? `<button onclick="removeRM(${idx})" style="border:none;background:none;color:#dc3545;cursor:pointer;font-size:15px;" title="Remove RM">×</button>` : '';
+        // Multi-RM still needs per-RM qty inputs (they describe how to split the param qty)
+        const rmQtyField = isSingleRM
+          ? `<span style="font-size:11px; color:#888; font-style:italic; margin-left:8px;">(uses parameter qty: ${paramQtyVal > 0 ? fmtNum(paramQtyVal, 2) + ' ' + unit : '—'})</span>`
+          : `<input type="number" class="form-input rm-qty" data-rmidx="${idx}" value="${rm.qty != null ? rm.qty : ''}" step="0.01" placeholder="${fmtNum(paramQtyVal, 2)}" style="width:80px; margin-left:8px;"> <span style="color:#888;font-size:11px;">${unit}</span>`;
         row.innerHTML = `
           <td>${label} ${addBtn}</td>
-          <td><select class="form-select rm-sel" data-rmidx="${idx}">${buildOptionsHtml(opts, rm.id)}</select></td>
-          <td class="cell-num rm-rate">—</td>
-          <td><input type="number" class="form-input rm-qty" data-rmidx="${idx}" value="${rm.qty||''}" step="0.01" placeholder="param qty" style="width:80px;"></td>
-          <td class="cell-num rm-line">—</td>
+          <td><select class="form-select rm-sel" data-rmidx="${idx}" style="max-width:340px;">${buildOptionsHtml(opts, rm.id)}</select> ${rmQtyField}</td>
           <td>${delBtn}</td>
         `;
         body.appendChild(row);
@@ -1618,22 +2229,19 @@ function loadWorkspace(name, el) {
       return;
     }
 
-    // Normal single-select subcategory (RATE or PERCENT)
+    // Normal single-select subcategory
     const saved = sel[sub] || { id: '' };
     const row = document.createElement('tr');
     row.dataset.sub = sub;
     row.innerHTML = `
       <td>${sub}</td>
       <td><select class="form-select o-sel" data-sub="${sub}">${buildOptionsHtml(opts, saved.id)}</select></td>
-      <td class="cell-num r-v">—</td>
-      <td class="cell-num q-v" style="font-style:italic; color:#888">param qty</td>
-      <td class="cell-num l-v">—</td>
       <td><input type="text" class="form-input rmk" data-sub="${sub}" value="${(saved.remark||'').replace(/"/g,'&quot;')}" placeholder="—" style="font-size:12px;"></td>
     `;
     body.appendChild(row);
   });
 
-  // ---- Site-specific rows ----
+  // ---- Site-specific rows (user-added; their rate IS shown since user typed it) ----
   const ss = (projectState.siteSpecific && projectState.siteSpecific[name]) || [];
   ss.forEach((entry, idx) => {
     const row = document.createElement('tr');
@@ -1642,10 +2250,7 @@ function loadWorkspace(name, el) {
     const rateLabel = entry.type === 'PERCENT' ? `${entry.rate}%` : `₹ ${entry.rate.toLocaleString('en-IN')}`;
     row.innerHTML = `
       <td>${entry.subcategory || entry.name} <span style="background:#fff3cd; color:#856404; padding:1px 5px; font-size:10px; border-radius:3px;">📌 site</span></td>
-      <td style="font-style:italic; color:#555;">${entry.name}</td>
-      <td class="cell-num">${rateLabel}</td>
-      <td class="cell-num" style="font-style:italic; color:#888">param qty</td>
-      <td class="cell-num ss-line">—</td>
+      <td style="font-style:italic; color:#555;">${entry.name} <span style="color:#888; font-size:11px; margin-left:8px;">(${rateLabel})</span></td>
       <td><button onclick="removeSiteSpecific('${name.replace(/'/g, "\\'")}', ${idx})" style="border:none; background:none; color:#dc3545; cursor:pointer; font-size:15px;" title="Remove">×</button></td>
     `;
     body.appendChild(row);
@@ -1661,6 +2266,39 @@ function loadWorkspace(name, el) {
   document.querySelectorAll('.rm-qty').forEach(i => i.oninput = sync);
   document.querySelectorAll('.rmk').forEach(i => i.oninput = sync);
   sync();
+}
+
+// =========================================================
+// Back / Next nav between included parameters (Build B2)
+// =========================================================
+function navParam(delta) {
+  const included = getIncludedParams();
+  if (included.length === 0) return;
+  const cur = included.indexOf(activeP);
+  let next = cur + delta;
+  if (next < 0) next = 0;
+  if (next >= included.length) next = included.length - 1;
+  if (next === cur) return;
+  const targetParam = included[next];
+  const item = document.querySelector(`.param-item[data-param="${targetParam.replace(/"/g,'\\"')}"]`);
+  if (item) loadWorkspace(targetParam, item);
+  // Scroll to top of workspace for the new param
+  const ws = document.querySelector('.workspace');
+  if (ws) ws.scrollIntoView({ behavior:'smooth', block:'start' });
+}
+
+function updateParamNavButtons() {
+  const included = getIncludedParams();
+  const cur = included.indexOf(activeP);
+  const prev = document.getElementById('paramPrevBtn');
+  const next = document.getElementById('paramNextBtn');
+  const stat = document.getElementById('paramNavStatus');
+  if (prev) prev.disabled = (cur <= 0);
+  if (next) next.disabled = (cur < 0 || cur >= included.length - 1);
+  if (stat) {
+    if (cur >= 0) stat.innerText = `Parameter ${cur + 1} of ${included.length}`;
+    else stat.innerText = '';
+  }
 }
 
 // Add / remove RM rows (multi raw-material)
@@ -1730,13 +2368,22 @@ function sync() {
     }
     const opt = dd.options[dd.selectedIndex];
     const rate = parseFloat(opt.dataset.rate) || 0;
-    // RM qty: use the per-RM qty if entered, else fall back to paramQty
+    // RM qty: use the per-RM qty if entered (multi-RM), else fall back to paramQty (single RM)
     const rmQty = (qtyEl && qtyEl.value !== '') ? (parseFloat(qtyEl.value) || 0) : paramQty;
     const lineTotal = rate * rmQty;
     totalRMCost += lineTotal;
     rmQtySum += rmQty;
     if (rateCell) rateCell.innerText = fmtINR(rate);
     if (lineCell) lineCell.innerText = fmtINR(lineTotal);
+    // For single-RM rows, the qty cell is a display <div> (not input). Refresh it live.
+    if (!qtyEl) {
+      const displayCell = row.querySelector('td:nth-child(4) div');
+      if (displayCell && paramQty > 0) {
+        displayCell.innerHTML = `${fmtNum(paramQty, 2)} ${unit}<br><span style="font-size:9px; color:#999;">auto</span>`;
+      } else if (displayCell) {
+        displayCell.innerHTML = `—<br><span style="font-size:9px; color:#999;">auto</span>`;
+      }
+    }
     rms.push({
       id: dd.value, name: opt.dataset.name, group: opt.dataset.group || '',
       rate, qty: rmQty, line: lineTotal
@@ -1832,8 +2479,10 @@ function sync() {
 
   projectState.selections[activeP] = selStore;
 
-  document.getElementById('paramUnitRateDisplay').innerText = fmtINR(unitRateTotal);
-  document.getElementById('paramTotalDisplay').innerText = fmtINR(paramTotal);
+  const purdEl = document.getElementById('paramUnitRateDisplay');
+  if (purdEl) purdEl.innerText = fmtINR(unitRateTotal);
+  const ptdEl = document.getElementById('paramTotalDisplay');
+  if (ptdEl) ptdEl.innerText = fmtINR(paramTotal);
 
   refreshSidebarStatus();
   scheduleAutosave();
@@ -1856,7 +2505,10 @@ function performAutosave() {
       details: projectState.details,
       qtys: projectState.qtys,
       selections: projectState.selections,
-      siteSpecific: projectState.siteSpecific || {}
+      siteSpecific: projectState.siteSpecific || {},
+      included: projectState.included || {},
+      step3: projectState.step3 || {},
+      customerQuote: projectState.customerQuote || { descriptions: {} }
     };
     localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(snapshot));
     const el = document.getElementById('autosaveStatus');
@@ -1880,6 +2532,9 @@ function restoreFromLocalSave() {
     projectState.qtys = snap.qtys || {};
     projectState.selections = snap.selections || {};
     projectState.siteSpecific = snap.siteSpecific || {};
+    projectState.included = snap.included || {};
+    projectState.step3 = snap.step3 || {};
+    projectState.customerQuote = snap.customerQuote || { descriptions: {} };
     if (snap.details) {
       const d = snap.details;
       const set = (id, v) => { const el = document.getElementById(id); if (el && v != null) el.value = v; };
@@ -1898,6 +2553,71 @@ function clearLocalSave() {
   try { localStorage.removeItem(AUTOSAVE_KEY); } catch (e) {}
 }
 
+// =========================================================
+// NEW QUOTE: full reset — wipes selections, qtys, site-specific rows,
+// project details, AND the locally-saved draft.
+// =========================================================
+async function startNewQuote() {
+  if (!confirm('Start a new quote? This will clear ALL current entries (selections, quantities, site-specific rows, and the locally-saved draft).\n\nMake sure your current work is saved if you need it.')) return;
+
+  // Wipe state
+  projectState.selections = {};
+  projectState.qtys = {};
+  projectState.siteSpecific = {};
+  projectState.included = {};
+  projectState.step3 = {};
+  projectState.customerQuote = { descriptions: {} };
+  projectState.details = {};
+  activeP = null;
+  clearLocalSave();
+
+  // Clear Step 1 inputs
+  const ids = ['projRef','projDate','projName','projClient','projLoc','projDist','projHeight','projArea','projSafety','projDesign','projMargin','projGST'];
+  ids.forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+  // Re-default the date to today
+  const dateEl = document.getElementById('projDate');
+  if (dateEl) dateEl.value = new Date().toISOString().slice(0,10);
+  // Reset tonnage display
+  const tonEl = document.getElementById('projTonnage');
+  if (tonEl) tonEl.value = '0';
+  // Reset margin/GST to defaults if they had defaults
+  const margEl = document.getElementById('projMargin'); if (margEl && !margEl.value) margEl.value = 12;
+  const gstEl = document.getElementById('projGST'); if (gstEl && !gstEl.value) gstEl.value = 18;
+
+  // Refresh the Step 2 sidebar + qty table
+  if (typeof renderQtyTable === 'function') renderQtyTable();
+  if (typeof refreshSidebarStatus === 'function') refreshSidebarStatus();
+
+  // Clear the Step 2 workspace if currently open
+  const body = document.getElementById('builderBody');
+  if (body) body.innerHTML = '';
+  const titleEl = document.getElementById('activeTitle');
+  if (titleEl) titleEl.innerText = 'Select a parameter from the left';
+  const unitInfo = document.getElementById('activeUnitInfo');
+  if (unitInfo) unitInfo.innerText = '';
+  const paramHelp = document.getElementById('paramHelp');
+  if (paramHelp) paramHelp.innerHTML = '';
+  const warnEl = document.getElementById('rmSumWarning');
+  if (warnEl) warnEl.style.display = 'none';
+
+  // Try to fetch the next quote number from the server
+  try {
+    const res = await fetch(`${RENDER_URL}/api/next-quote-number`);
+    if (res.ok) {
+      const data = await res.json();
+      if (data.success && data.quoteRef) {
+        const refEl = document.getElementById('projRef');
+        if (refEl) refEl.value = data.quoteRef;
+      }
+    }
+  } catch (e) {
+    // Silent fail — user can type the ref manually
+  }
+
+  toast('📄 New quote started — fields cleared', 'ok', 3000);
+  goToPage(1);
+}
+
 // Push the entire quotation (PDF + JSON) to OneDrive — same as the existing
 // final save flow, but available as a button on Step 2 so you don't have to
 // reach the end to commit your work.
@@ -1912,15 +2632,35 @@ async function saveCurrentToCloud() {
   try {
     captureProjectDetails();
     injectVirtualParameters();
+    ensureStep3Overrides();
+    // Compute step3Computed: per-param computed unit/rounded/total values for analytics
+    const step3Computed = {};
+    getIncludedParams().forEach(p => {
+      if ((parseFloat(projectState.qtys[p])||0) <= 0) return;
+      const c = computeStep3ForParam(p);
+      const node = MASTER_DB[p];
+      step3Computed[p] = {
+        unit: (node && node.__unit) || 'MT',
+        unitPre: c.unitPre,
+        unitPostMargin: c.unitPostMargin,
+        unitRounded: c.unitRounded,
+        paramTotal: c.paramTotal,
+        roundingUnit: c.roundingUnit
+      };
+    });
     const doc = buildPDF();
     const pdfBase64 = doc.output('datauristring').split(',')[1];
     const jsonData = {
-      version: 4,
+      version: 5,
       savedAt: new Date().toISOString(),
       details: projectState.details,
       qtys: projectState.qtys,
       selections: projectState.selections,
-      siteSpecific: projectState.siteSpecific || {}
+      siteSpecific: projectState.siteSpecific || {},
+      included: projectState.included || {},
+      step3: projectState.step3 || {},
+      step3Computed,
+      customerQuote: projectState.customerQuote || { descriptions: {} }
     };
     const res = await fetch(`${RENDER_URL}/api/save-quotation`, {
       method: 'POST',
@@ -2089,11 +2829,226 @@ function computeAutoRateHeadless(sub, unit, pName, d) {
   return { label:'(auto)', rate: 0 };
 }
 
+// =========================================================
+// STEP 3 — Per-parameter margin & rounding (Build B4)
+// =========================================================
+
+// Returns the rounding unit for a param: 10 or 100 (default 100 if not set in master sheet)
+function getRoundingUnit(pName) {
+  const node = MASTER_DB[pName];
+  if (!node) return 100;
+  const ru = node.__roundingUnit;
+  if (ru === 10 || ru === 100) return ru;
+  return 100;
+}
+
+// Round a value to the nearest multiple of `unit` (10 or 100), using the
+// 49/50 rule: last (unit-sized) chunk's remainder < unit/2 → down, else up.
+// For unit=100: 26414128 (rem 28) → 26414100; 26414150 (rem 50) → 26414200.
+function roundToUnit(value, unit) {
+  if (!unit || unit < 2) return Math.round(value);
+  const remainder = value % unit;
+  const half = unit / 2;
+  if (remainder < half) return value - remainder;
+  return value + (unit - remainder);
+}
+
+// Pre-margin total for a parameter = sum of all line totals from its selections.
+// Includes RM, every chosen subcategory, AUTO rows, and site-specific rows.
+function computeParamPreMarginTotal(pName) {
+  const sel = projectState.selections[pName] || {};
+  let total = 0;
+  Object.values(sel).forEach(entry => {
+    if (!entry) return;
+    if (typeof entry.line === 'number') total += entry.line;
+  });
+  return total;
+}
+
+// Capture or default the per-param margin/rounding overrides on Step 3.
+function ensureStep3Overrides() {
+  if (!projectState.step3) projectState.step3 = {};
+  const defaultMargin = parseFloat(document.getElementById('projMargin').value) || 0;
+  getIncludedParams().forEach(p => {
+    if (!projectState.step3[p]) {
+      projectState.step3[p] = {
+        margin: defaultMargin,
+        roundEnabled: true
+      };
+    }
+  });
+  return defaultMargin;
+}
+
+// Compute everything for a parameter at the current Step 3 settings.
+// Returns { preMarginTotal, qty, unitPre, unitPostMargin, unitRounded, paramTotal, roundingUnit, margin }
+function computeStep3ForParam(pName) {
+  const ov = (projectState.step3 || {})[pName] || { margin: 0, roundEnabled: true };
+  const margin = parseFloat(ov.margin) || 0;
+  const qty = parseFloat(projectState.qtys[pName]) || 0;
+  const preMarginTotal = computeParamPreMarginTotal(pName);
+  const unitPre = qty > 0 ? preMarginTotal / qty : 0;
+  const unitPostMargin = unitPre * (1 + margin / 100);
+  const ru = getRoundingUnit(pName);
+  const unitRounded = ov.roundEnabled ? roundToUnit(unitPostMargin, ru) : Math.round(unitPostMargin);
+  const paramTotal = unitRounded * qty;
+  return {
+    preMarginTotal, qty, unitPre, unitPostMargin, unitRounded, paramTotal,
+    roundingUnit: ru, margin, roundEnabled: !!ov.roundEnabled
+  };
+}
+
+function prepareStep3() {
+  captureProjectDetails();
+  injectVirtualParameters();
+  const defaultMargin = ensureStep3Overrides();
+  const grid = document.getElementById('step3Grid');
+  if (!grid) return;
+
+  const included = getIncludedParams().filter(p => {
+    const q = parseFloat(projectState.qtys[p]) || 0;
+    return q > 0;
+  });
+
+  if (included.length === 0) {
+    grid.innerHTML = '<em style="color:#aaa;">No parameters with quantity > 0. Go back to Step 1 and enter quantities.</em>';
+    return;
+  }
+
+  // Header
+  let html = `
+    <div style="display:grid; grid-template-columns: 2.5fr 90px 100px 110px 120px 120px 130px; gap:8px 12px; align-items:center; font-size:12px; font-weight:700; text-transform:uppercase; color:#666; padding:6px 0; border-bottom:2px solid #e9ecef;">
+      <div>Parameter</div>
+      <div style="text-align:right;">Qty</div>
+      <div style="text-align:right;">Unit Cost (pre)</div>
+      <div style="text-align:right;">Margin %</div>
+      <div style="text-align:right;">Unit (post-marg)</div>
+      <div style="text-align:right;">Unit (rounded)</div>
+      <div style="text-align:right;">Param Total</div>
+    </div>
+  `;
+
+  included.forEach(p => {
+    const node = MASTER_DB[p];
+    const unit = (node && node.__unit) || 'MT';
+    const c = computeStep3ForParam(p);
+    const ov = projectState.step3[p];
+    const idSafe = p.replace(/[^a-z0-9]/gi,'_');
+    html += `
+      <div style="display:grid; grid-template-columns: 2.5fr 90px 100px 110px 120px 120px 130px; gap:8px 12px; align-items:center; font-size:13px; padding:8px 0; border-bottom:1px solid #f0f0f0;">
+        <div style="font-weight:600;">${cleanParamLabel(p)} <span style="color:#888; font-weight:400; font-size:11px;">(round to ₹${c.roundingUnit})</span></div>
+        <div style="text-align:right; color:#555;">${fmtNum(c.qty,2)} ${unit}</div>
+        <div style="text-align:right; color:#888; font-family:monospace;">${fmtINR(c.unitPre)}</div>
+        <div style="text-align:right;"><input type="number" step="0.1" value="${ov.margin}" data-step3-margin="${p.replace(/"/g,'&quot;')}" class="form-input" style="max-width:90px; padding:4px 8px; text-align:right;" oninput="onStep3MarginInput(this)"> %</div>
+        <div style="text-align:right; color:#666; font-family:monospace;">${fmtINR(c.unitPostMargin)}</div>
+        <div style="text-align:right;"><label style="cursor:pointer; font-family:monospace; color:var(--brand-primary); font-weight:700;"><input type="checkbox" ${ov.roundEnabled?'checked':''} data-step3-round="${p.replace(/"/g,'&quot;')}" oninput="onStep3RoundToggle(this)" style="margin-right:4px;">${fmtINR(c.unitRounded)}</label></div>
+        <div style="text-align:right; font-weight:700; color:var(--brand-primary); font-family:monospace;">${fmtINR(c.paramTotal)}</div>
+      </div>
+    `;
+  });
+
+  grid.innerHTML = html;
+}
+
+function onStep3MarginInput(input) {
+  const p = input.dataset.step3Margin;
+  if (!projectState.step3[p]) projectState.step3[p] = { margin:0, roundEnabled:true };
+  projectState.step3[p].margin = parseFloat(input.value) || 0;
+  prepareStep3();   // re-render to refresh dependent cells
+}
+
+function onStep3RoundToggle(cb) {
+  const p = cb.dataset.step3Round;
+  if (!projectState.step3[p]) projectState.step3[p] = { margin:0, roundEnabled:true };
+  projectState.step3[p].roundEnabled = cb.checked;
+  prepareStep3();
+}
+
+// =========================================================
+// STEP 4 — Grand Total Summary (Build B5)
+// =========================================================
+function prepareStep4() {
+  const included = getIncludedParams().filter(p => (parseFloat(projectState.qtys[p])||0) > 0);
+  const grid = document.getElementById('step4Grid');
+  if (!grid) return;
+
+  if (included.length === 0) {
+    grid.innerHTML = '<em style="color:#aaa;">No parameters with quantity > 0.</em>';
+    return;
+  }
+
+  let html = `
+    <div style="display:grid; grid-template-columns: 40px 1fr 100px 60px 130px 160px; gap:8px 12px; align-items:center; font-size:12px; font-weight:700; text-transform:uppercase; color:#666; padding:6px 0; border-bottom:2px solid #e9ecef;">
+      <div style="text-align:center;">#</div>
+      <div>Parameter</div>
+      <div style="text-align:right;">Qty</div>
+      <div>Unit</div>
+      <div style="text-align:right;">Unit Cost (final)</div>
+      <div style="text-align:right;">Total</div>
+    </div>
+  `;
+
+  let grandTotal = 0;
+  let serial = 0;
+  included.forEach(p => {
+    const node = MASTER_DB[p];
+    const unit = (node && node.__unit) || 'MT';
+    const c = computeStep3ForParam(p);
+    serial++;
+    grandTotal += c.paramTotal;
+    html += `
+      <div style="display:grid; grid-template-columns: 40px 1fr 100px 60px 130px 160px; gap:8px 12px; align-items:center; font-size:13px; padding:7px 0; border-bottom:1px solid #f5f5f5;">
+        <div style="text-align:center; color:#999;">${serial}</div>
+        <div style="font-weight:500;">${cleanParamLabel(p)}</div>
+        <div style="text-align:right; color:#555;">${fmtNum(c.qty,2)}</div>
+        <div style="color:#888;">${unit}</div>
+        <div style="text-align:right; font-family:monospace; color:#444;">${fmtINR(c.unitRounded)}</div>
+        <div style="text-align:right; font-weight:700; font-family:monospace; color:var(--brand-primary);">${fmtINR(c.paramTotal)}</div>
+      </div>
+    `;
+  });
+
+  // Subtotal + Margin info banner (margin's already baked in, but show summary)
+  const d = projectState.details || {};
+  const gstPct = parseFloat(document.getElementById('projGST').value) || 0;
+  const gstAmt = grandTotal * (gstPct / 100);
+  const finalTotal = grandTotal + gstAmt;
+
+  html += `
+    <div style="margin-top:18px; padding:14px 16px; background:#f8f9fa; border-radius:6px;">
+      <div style="display:flex; justify-content:space-between; padding:5px 0; font-size:14px;">
+        <div style="color:#555;">Subtotal (post-margin, rounded)</div>
+        <div style="font-family:monospace; font-weight:600;">${fmtINR(grandTotal)}</div>
+      </div>
+      <div style="display:flex; justify-content:space-between; padding:5px 0; font-size:14px; color:#666;">
+        <div>GST @ ${gstPct}%</div>
+        <div style="font-family:monospace;">${fmtINR(gstAmt)}</div>
+      </div>
+      <div style="display:flex; justify-content:space-between; padding:10px 0 4px; font-size:16px; font-weight:700; color:var(--brand-primary); border-top:2px solid #002b5f; margin-top:8px;">
+        <div>GRAND TOTAL (incl. GST)</div>
+        <div style="font-family:monospace;">${fmtINR(finalTotal)}</div>
+      </div>
+    </div>
+  `;
+
+  grid.innerHTML = html;
+  // Store the totals for downstream use (preview, PDF, save)
+  projectState.step4Summary = { subtotal: grandTotal, gstPct, gstAmt, finalTotal };
+}
+
 function generatePreview() {
   captureProjectDetails();
   injectVirtualParameters();
+  ensureStep3Overrides();
   const d = projectState.details;
-  let grandBase = 0;
+
+  // Compute per-param rounded totals using Step 3 overrides
+  const included = getIncludedParams().filter(p => (parseFloat(projectState.qtys[p])||0) > 0);
+  const rows = included.map(p => ({ p, ...computeStep3ForParam(p) }));
+  const grandBase = rows.reduce((s, r) => s + r.paramTotal, 0);
+  const gstPct = parseFloat(d.gst) || 0;
+  const gst = grandBase * (gstPct / 100);
+  const finalTotal = grandBase + gst;
 
   let html = `
   <div class="project-info-card">
@@ -2103,110 +3058,47 @@ function generatePreview() {
       <div class="pi-item"><div class="pi-lbl">Client</div><div class="pi-val">${d.client}</div></div>
       <div class="pi-item"><div class="pi-lbl">Location</div><div class="pi-val">${d.loc}</div></div>
       <div class="pi-item"><div class="pi-lbl">Distance</div><div class="pi-val">${d.dist} km</div></div>
-      <div class="pi-item"><div class="pi-lbl">Building Height</div><div class="pi-val">${d.height} m</div></div>
       <div class="pi-item"><div class="pi-lbl">Total Area</div><div class="pi-val">${fmtNum(d.area,0)} sqm</div></div>
       <div class="pi-item"><div class="pi-lbl">Steel Tonnage</div><div class="pi-val">${fmtNum(d.tonnage,2)} MT</div></div>
-      <div class="pi-item"><div class="pi-lbl">Safety Standard</div><div class="pi-val">${d.safety}</div></div>
-      <div class="pi-item"><div class="pi-lbl">Design Included</div><div class="pi-val">${d.design}</div></div>
+      <div class="pi-item"><div class="pi-lbl">Safety</div><div class="pi-val">${d.safety}</div></div>
     </div>
   </div>
+  <div class="card" style="margin-top:14px;">
+    <h3 style="color:var(--brand-primary); margin-top:0;">Parameter Costs</h3>
+    <table class="report-table">
+      <thead><tr>
+        <th width="40">#</th>
+        <th>Parameter</th>
+        <th class="cell-num" width="100">Qty</th>
+        <th class="cell-num" width="180">Total</th>
+      </tr></thead>
+      <tbody>`;
 
-  <div class="card">
-  <div class="section-title">Final Quotation Sheet</div>
-  <table class="report-table" id="finalTable">
-    <thead><tr>
-      <th width="50">SL</th>
-      <th>DESCRIPTION</th>
-      <th class="cell-num" width="110">UNIT RATE</th>
-      <th class="cell-num" width="80">QTY</th>
-      <th class="cell-num" width="80">UNIT</th>
-      <th class="cell-num" width="140">TOTAL</th>
-    </tr></thead>
-    <tbody>`;
-
-  let sl = 1;
-  Object.entries(projectState.selections).forEach(([pName, subs]) => {
-    const entries = Object.entries(subs);
-    if (entries.length === 0) return;
-    const qty = parseFloat(projectState.qtys[pName]) || 0;
-    if (qty <= 0) return;
-
-    const unit = MASTER_DB[pName].__unit || 'MT';
-    // Parameter total = sum of all line amounts (RM uses .line, others use perUnit*qty)
-    let paramTotal = 0;
-    entries.forEach(([, data]) => {
-      if (data.isRM) paramTotal += (data.line || 0);
-      else paramTotal += (data.line != null ? data.line : (data.perUnit||0) * qty);
-    });
-
-    html += `<tr class="row-category"><td>${sl}</td><td colspan="5">${cleanParamLabel(pName)}</td></tr>`;
-
-    // Order entries by subcategory rank for consistent display
-    entries.sort((a,b) => subcatRank((subs[a[0]].subcategory||a[0])) - subcatRank((subs[b[0]].subcategory||b[0])));
-
-    entries.forEach(([subName, data]) => {
-      if (data.isRM && Array.isArray(data.rms)) {
-        // One line per raw material
-        data.rms.forEach(rm => {
-          html += `<tr>
-            <td></td>
-            <td style="padding-left:20px">RM COST${rm.group?' — '+rm.group:''} <span style="color:#666;font-size:11px">(${rm.name})</span></td>
-            <td class="cell-num">${fmtINR(rm.rate)}</td>
-            <td class="cell-num">${fmtNum(rm.qty,2)}</td>
-            <td class="cell-num">${unit}</td>
-            <td class="cell-num">${fmtINR(rm.line)}</td>
-          </tr>`;
-        });
-        return;
-      }
-      const rateDisp = data.type === 'PERCENT'
-        ? `${(data.rate||0).toFixed(2)}% → ${fmtINR(data.perUnit)}`
-        : fmtINR(data.perUnit);
-      const displayLabel = data.subcategory || subName;
-      const tag = data.isAuto
-        ? ' <span class="tag-rate">AUTO</span>'
-        : data.isSiteSpecific
-          ? ' <span style="background:#fff3cd; color:#856404; padding:1px 5px; font-size:10px; border-radius:3px;">📌 site</span>'
-          : '';
-      const remarkTxt = data.remark ? ` <span style="color:#999;font-size:10px">[${data.remark}]</span>` : '';
+  if (rows.length === 0) {
+    html += `<tr><td colspan="4" class="empty-state"><h3>No items selected</h3><div>Go back and configure parameters.</div></td></tr>`;
+  } else {
+    rows.forEach((r, i) => {
+      const node = MASTER_DB[r.p];
+      const unit = (node && node.__unit) || 'MT';
       html += `<tr>
-        <td></td>
-        <td style="padding-left:20px">${displayLabel}${tag} <span style="color:#666;font-size:11px">(${data.name})</span>${remarkTxt}</td>
-        <td class="cell-num">${rateDisp}</td>
-        <td class="cell-num">${fmtNum(qty,2)}</td>
-        <td class="cell-num">${unit}</td>
-        <td class="cell-num">${fmtINR(data.line != null ? data.line : (data.perUnit||0)*qty)}</td>
+        <td>${i+1}</td>
+        <td style="font-weight:500;">${cleanParamLabel(r.p)}</td>
+        <td class="cell-num">${fmtNum(r.qty,2)} ${unit}</td>
+        <td class="cell-num" style="font-weight:600;">${fmtINR(r.paramTotal)}</td>
       </tr>`;
     });
-    html += `<tr class="row-total">
-      <td></td>
-      <td style="text-align:right" colspan="4">SUBTOTAL — ${cleanParamLabel(pName)}</td>
-      <td class="cell-num">${fmtINR(paramTotal)}</td>
-    </tr>`;
-    grandBase += paramTotal;
-    sl++;
-  });
-
-  if (sl === 1) {
-    html += `<tr><td colspan="6" class="empty-state"><h3>No items selected</h3><div>Go back to Page 2 and configure parameters.</div></td></tr>`;
   }
 
-  const margin = grandBase * (d.margin / 100);
-  const afterMargin = grandBase + margin;
-  const gst = afterMargin * (d.gst / 100);
-  const final = afterMargin + gst;
-
   html += `
-    <tr class="row-total"><td colspan="5" style="text-align:right">SUBTOTAL (BASE COST)</td><td class="cell-num">${fmtINR(grandBase)}</td></tr>
-    <tr><td colspan="5" style="text-align:right">MARGIN @ ${d.margin}%</td><td class="cell-num">${fmtINR(margin)}</td></tr>
-    <tr class="row-total"><td colspan="5" style="text-align:right">AFTER MARGIN</td><td class="cell-num">${fmtINR(afterMargin)}</td></tr>
-    <tr><td colspan="5" style="text-align:right">GST @ ${d.gst}%</td><td class="cell-num">${fmtINR(gst)}</td></tr>
-    <tr class="row-grand"><td colspan="5" style="text-align:right">GRAND TOTAL</td><td class="cell-num">${fmtINR(final)}</td></tr>
-  </tbody></table>`;
+      <tr class="row-total"><td colspan="3" style="text-align:right">Subtotal</td><td class="cell-num">${fmtINR(grandBase)}</td></tr>
+      <tr><td colspan="3" style="text-align:right">Margin</td><td class="cell-num" style="color:#666; font-style:italic;">+ ${d.margin || 0}% <span style="font-size:11px;">(already included in totals)</span></td></tr>
+      <tr><td colspan="3" style="text-align:right">GST @ ${gstPct}%</td><td class="cell-num">+ ${fmtINR(gst)}</td></tr>
+      <tr class="row-grand"><td colspan="3" style="text-align:right">GRAND TOTAL</td><td class="cell-num">${fmtINR(finalTotal)}</td></tr>
+    </tbody></table>`;
 
   if (d.area > 0) {
-    const perSqm = final / d.area;
-    const perSqft = final / (d.area * 10.7639);
+    const perSqm = finalTotal / d.area;
+    const perSqft = finalTotal / (d.area * 10.7639);
     html += `<div class="transport-summary" style="margin-top:18px;">
       <strong>SYNOPSIS:</strong>
       Total Area: <strong>${fmtNum(d.area,0)} sqm</strong> (${fmtNum(d.area*10.7639,0)} sqft) &nbsp;|&nbsp;
@@ -2220,6 +3112,9 @@ function generatePreview() {
   </div>`;
   html += `</div>`;
 
+  // Save for downstream
+  projectState.previewTotals = { grandBase, gstPct, gst, finalTotal, rows };
+
   document.getElementById('previewArea').innerHTML = html;
 }
 
@@ -2229,6 +3124,7 @@ function generatePreview() {
 function downloadExcel() {
   captureProjectDetails();
   injectVirtualParameters();
+  ensureStep3Overrides();
   const d = projectState.details;
   const wb = XLSX.utils.book_new();
   const rows = [];
@@ -2242,61 +3138,44 @@ function downloadExcel() {
   rows.push(['Design Included', d.design, '', 'Margin %', d.margin]);
   rows.push(['GST %', d.gst]);
   rows.push([]);
-  rows.push(['SL', 'DESCRIPTION', 'OPTION', 'UNIT RATE (₹)', 'QTY', 'UNIT', 'TOTAL (₹)', 'REMARK']);
+  rows.push(['SL', 'PARAMETER', 'QTY', 'UNIT', 'UNIT COST (₹)', 'TOTAL (₹)', 'MARGIN %', 'ROUNDED TO']);
 
-  let sl = 1, grandBase = 0;
-  Object.entries(projectState.selections).forEach(([pName, subs]) => {
-    const entries = Object.entries(subs);
-    const qty = parseFloat(projectState.qtys[pName]) || 0;
-    if (entries.length === 0 || qty <= 0) return;
-    const unit = MASTER_DB[pName].__unit || 'MT';
-    let paramTotal = 0;
-    entries.forEach(([, data]) => {
-      if (data.isRM) paramTotal += (data.line||0);
-      else paramTotal += (data.line != null ? data.line : (data.perUnit||0)*qty);
-    });
-    rows.push([sl, cleanParamLabel(pName), '', '', '', '', '', '']);
-    entries.sort((a,b) => subcatRank((subs[a[0]].subcategory||a[0])) - subcatRank((subs[b[0]].subcategory||b[0])));
-    entries.forEach(([subName, data]) => {
-      if (data.isRM && Array.isArray(data.rms)) {
-        data.rms.forEach(rm => {
-          rows.push(['', '  RM COST' + (rm.group?' — '+rm.group:''), rm.name,
-            Math.round(rm.rate), rm.qty, unit, Math.round(rm.line), '']);
-        });
-        return;
-      }
-      const label = data.subcategory || subName;
-      const tagSuffix = data.isAuto ? ' [AUTO]' : data.isSiteSpecific ? ' [SITE]' : '';
-      const lineAmt = data.line != null ? data.line : (data.perUnit||0)*qty;
-      rows.push(['', '  ' + label + tagSuffix, data.name,
-        data.type === 'PERCENT' ? data.rate.toFixed(2)+'%' : Math.round(data.perUnit||0),
-        qty, unit, Math.round(lineAmt), data.remark || '']);
-    });
-    rows.push(['', `SUBTOTAL — ${cleanParamLabel(pName)}`, '', '', qty, unit, Math.round(paramTotal), '']);
-    grandBase += paramTotal;
-    sl++;
+  const included = getIncludedParams().filter(p => (parseFloat(projectState.qtys[p])||0) > 0);
+  let grandBase = 0;
+  included.forEach((p, i) => {
+    const node = MASTER_DB[p];
+    const unit = (node && node.__unit) || 'MT';
+    const c = computeStep3ForParam(p);
+    grandBase += c.paramTotal;
+    rows.push([
+      i+1,
+      cleanParamLabel(p),
+      c.qty,
+      unit,
+      Math.round(c.unitRounded),
+      Math.round(c.paramTotal),
+      c.margin,
+      c.roundEnabled ? c.roundingUnit : 'off'
+    ]);
   });
 
-  const margin = grandBase * (d.margin / 100);
-  const afterMargin = grandBase + margin;
-  const gst = afterMargin * (d.gst / 100);
-  const final = afterMargin + gst;
+  const gstPct = parseFloat(d.gst) || 0;
+  const gst = grandBase * (gstPct / 100);
+  const finalTotal = grandBase + gst;
 
   rows.push([]);
   rows.push(['', '', '', '', '', 'SUBTOTAL', Math.round(grandBase)]);
-  rows.push(['', '', '', '', '', `MARGIN @ ${d.margin}%`, Math.round(margin)]);
-  rows.push(['', '', '', '', '', 'AFTER MARGIN', Math.round(afterMargin)]);
-  rows.push(['', '', '', '', '', `GST @ ${d.gst}%`, Math.round(gst)]);
-  rows.push(['', '', '', '', '', 'GRAND TOTAL', Math.round(final)]);
+  rows.push(['', '', '', '', '', `GST @ ${gstPct}%`, Math.round(gst)]);
+  rows.push(['', '', '', '', '', 'GRAND TOTAL', Math.round(finalTotal)]);
   if (d.area > 0) {
     rows.push([]);
-    rows.push(['', '', '', '', '', 'PER SQM', Math.round(final / d.area)]);
-    rows.push(['', '', '', '', '', 'PER SQFT', Math.round(final / (d.area * 10.7639))]);
+    rows.push(['', '', '', '', '', 'PER SQM', Math.round(finalTotal / d.area)]);
+    rows.push(['', '', '', '', '', 'PER SQFT', Math.round(finalTotal / (d.area * 10.7639))]);
   }
 
   const ws = XLSX.utils.aoa_to_sheet(rows);
-  ws['!cols'] = [{wch:6},{wch:38},{wch:28},{wch:16},{wch:10},{wch:8},{wch:18}];
-  ws['!merges'] = [{s:{r:0,c:0},e:{r:0,c:6}}];
+  ws['!cols'] = [{wch:5},{wch:42},{wch:10},{wch:8},{wch:14},{wch:18},{wch:10},{wch:12}];
+  ws['!merges'] = [{s:{r:0,c:0},e:{r:0,c:7}}];
   XLSX.utils.book_append_sheet(wb, ws, 'Quotation');
   XLSX.writeFile(wb, `${buildFileBase(d)}.xlsx`);
 }
@@ -2307,6 +3186,7 @@ function downloadExcel() {
 function buildPDF() {
   captureProjectDetails();
   injectVirtualParameters();
+  ensureStep3Overrides();
   const { jsPDF } = window.jspdf;
   const d = projectState.details;
   const doc = new jsPDF({ unit: 'mm', format: 'a4' });
@@ -2320,9 +3200,8 @@ function buildPDF() {
   doc.rect(0, 32, pageW, 1.5, 'F');
 
   // Logo on the left (aspect-preserved within 22mm height)
-  const LOGO_H = 22; // mm
-  const LOGO_TOP = 5; // mm
-  let logoRenderedW = 0;
+  const LOGO_H = 22;
+  const LOGO_TOP = 5;
   try {
     const logo = document.getElementById('brandLogo');
     if (logo && logo.complete && logo.naturalWidth > 0) {
@@ -2330,14 +3209,12 @@ function buildPDF() {
       canvas.width = logo.naturalWidth;
       canvas.height = logo.naturalHeight;
       canvas.getContext('2d').drawImage(logo, 0, 0);
-      // Preserve aspect ratio: scale width to maintain natural ratio at LOGO_H height
       const aspect = logo.naturalWidth / logo.naturalHeight;
-      logoRenderedW = LOGO_H * aspect;
+      const logoRenderedW = LOGO_H * aspect;
       doc.addImage(canvas.toDataURL('image/png'), 'PNG', 8, LOGO_TOP, logoRenderedW, LOGO_H);
     }
   } catch (e) {}
 
-  // Title "COSTING ESTIMATION" + client (bold) + project (smaller) — all dark navy on white
   doc.setTextColor(0, 43, 95);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(18);
@@ -2349,10 +3226,9 @@ function buildPDF() {
   doc.setFontSize(9);
   doc.setTextColor(80, 80, 80);
   doc.text(d.name || '—', pageW / 2, 28, { align: 'center' });
-  // Reset text colour for the rest of the document
   doc.setTextColor(0, 0, 0);
 
-  // ----- PROJECT INFO STRIP (below header) -----
+  // ----- PROJECT INFO STRIP -----
   let y = 42;
   doc.setTextColor(0, 43, 95);
   doc.setFont('helvetica', 'bold');
@@ -2377,181 +3253,58 @@ function buildPDF() {
     doc.setFont('helvetica','normal'); doc.setTextColor(20); doc.text(String(rowArr[3]), 148, y);
     y += 5;
   });
-  y += 3;
+  y += 4;
 
-  // ----- BUILD ROWS PER PARAMETER (group structure for page breaks) -----
-  // Strategy: render ONE autoTable per parameter, each with pageBreak='always' AFTER it
-  // (except the last). This forces each new parameter onto its own page if it doesn't fit.
-  // Within a parameter, rows never break (rowPageBreak:'avoid').
-
-  const cleanParamName = cleanParamLabel;
-
-  // Sub-totals tracker
-  const paramSummary = []; // { sl, name, total }
-  let sl = 1;
+  // ----- ONE-LINE-PER-PARAMETER TABLE (no internal breakdown) -----
+  const included = getIncludedParams().filter(p => (parseFloat(projectState.qtys[p])||0) > 0);
+  const body = [];
   let grandBase = 0;
-  let startY = y;
-
-  Object.entries(projectState.selections).forEach(([pName, subs]) => {
-    const entries = Object.entries(subs);
-    const qty = parseFloat(projectState.qtys[pName]) || 0;
-    if (entries.length === 0 || qty <= 0) return;
-    const unit = (MASTER_DB[pName] && MASTER_DB[pName].__unit) || 'MT';
-    const cleanName = cleanParamName(pName);
-
-    // Parameter total = sum of line amounts
-    let paramTotal = 0;
-    entries.forEach(([, data]) => {
-      if (data.isRM) paramTotal += (data.line||0);
-      else paramTotal += (data.line != null ? data.line : (data.perUnit||0)*qty);
-    });
-    grandBase += paramTotal;
-    paramSummary.push({ sl, name: cleanName, total: paramTotal });
-
-    const body = [];
-    body.push([{
-      content: `${sl}. ${cleanName}`,
-      colSpan: 6,
-      styles: { fillColor:[233,236,239], textColor:[0,43,95], fontStyle:'bold', halign:'center', fontSize: 10 }
-    }]);
-
-    // Order by subcat rank
-    entries.sort((a,b) => subcatRank((subs[a[0]].subcategory||a[0])) - subcatRank((subs[b[0]].subcategory||b[0])));
-
-    entries.forEach(([subName, data]) => {
-      if (data.isRM && Array.isArray(data.rms)) {
-        data.rms.forEach(rm => {
-          body.push([
-            '',
-            `RM COST${rm.group?' — '+rm.group:''}  (${rm.name})`,
-            fmtINR(rm.rate).replace('₹ ',''),
-            fmtNum(rm.qty, 2),
-            unit,
-            fmtINR(rm.line).replace('₹ ','')
-          ]);
-        });
-        return;
-      }
-      const label = data.subcategory || subName;
-      const tagSuffix = data.isAuto ? ' [AUTO]' : data.isSiteSpecific ? ' [SITE]' : '';
-      const remarkTxt = data.remark ? `  — ${data.remark}` : '';
-      const description = `${label}${tagSuffix}  (${data.name})${remarkTxt}`;
-      const rate = data.type === 'PERCENT'
-        ? `${(data.rate||0).toFixed(2)}%`
-        : fmtINR(data.perUnit).replace('₹ ', '');
-      const lineAmt = fmtINR(data.line != null ? data.line : (data.perUnit||0)*qty).replace('₹ ', '');
-      body.push(['', description, rate, fmtNum(qty, 2), unit, lineAmt]);
-    });
-
-    // Subtotal row for this param
+  included.forEach((p, i) => {
+    const node = MASTER_DB[p];
+    const unit = (node && node.__unit) || 'MT';
+    const c = computeStep3ForParam(p);
+    grandBase += c.paramTotal;
     body.push([
-      { content: `Subtotal — ${cleanName}`, colSpan: 4, styles: { fontStyle:'bold', halign:'right', fillColor:[241,243,245] }},
-      { content: unit, styles: { fontStyle:'bold', halign:'center', fillColor:[241,243,245] }},
-      { content: fmtINR(paramTotal).replace('₹ ',''), styles: { fontStyle:'bold', halign:'right', fillColor:[241,243,245] }}
+      String(i + 1),
+      cleanParamLabel(p),
+      fmtNum(c.qty, 2),
+      unit,
+      fmtINR(c.unitRounded).replace('₹ ', ''),
+      fmtINR(c.paramTotal).replace('₹ ', '')
     ]);
-
-    // Render this parameter as a single table; keep its rows together; new page if won't fit
-    doc.autoTable({
-      startY: startY,
-      head: [['SL','DESCRIPTION','UNIT RATE','QTY','UNIT','TOTAL (₹)']],
-      body,
-      theme: 'grid',
-      styles: {
-        fontSize: 9,
-        cellPadding: 2.5,
-        font: 'helvetica',
-        overflow: 'linebreak',
-        valign: 'middle'
-      },
-      headStyles: { fillColor: [0, 43, 95], textColor: 255, fontStyle: 'bold', halign:'left', fontSize: 9 },
-      columnStyles: {
-        0: { cellWidth: 10, halign:'center' },
-        1: { cellWidth: 78 },
-        2: { cellWidth: 26, halign: 'right' },
-        3: { cellWidth: 18, halign: 'right' },
-        4: { cellWidth: 14, halign: 'center' },
-        5: { cellWidth: 'auto', halign: 'right' }
-      },
-      rowPageBreak: 'avoid', // never split a row across pages
-      pageBreak: 'auto', // start new page only if rows don't fit
-      margin: { left: 14, right: 14, bottom: 18 },
-      willDrawCell: function(data) {
-        // For the very first cell of this table, if there's not enough vertical room
-        // for the whole parameter, force a page break BEFORE this table.
-        // We approximate "enough room" by checking if startY + estimated table height > pageH.
-      },
-      didDrawPage: function(data) {
-        // Footer: page number only
-        doc.setFontSize(7);
-        doc.setTextColor(120);
-        const total = doc.internal.getNumberOfPages();
-        doc.text(`Page ${total}`, pageW - 20, pageH - 8);
-        doc.text(`METFRAA  |  ${d.ref || ''}`, 14, pageH - 8);
-      }
-    });
-
-    // Force next parameter onto a fresh page so each parameter is self-contained
-    doc.addPage();
-    startY = 14;
-
-    sl++;
   });
 
-  // After the last parameter, we did an extra addPage — remove it
-  const totalPages = doc.internal.getNumberOfPages();
-  if (totalPages > 1) {
-    doc.deletePage(totalPages);
-  }
+  const gstPct = parseFloat(d.gst) || 0;
+  const gst = grandBase * (gstPct / 100);
+  const finalTotal = grandBase + gst;
 
-  // ----- FINAL SUMMARY PAGE (totals + synopsis) -----
-  doc.addPage();
-  let ySum = 20;
-  doc.setFont('helvetica', 'bold');
-  doc.setTextColor(0, 43, 95);
-  doc.setFontSize(14);
-  doc.text('COSTING SUMMARY', pageW / 2, ySum, { align: 'center' });
-  ySum += 10;
-
-  // Param totals table
-  const summaryBody = paramSummary.map(p => [
-    String(p.sl),
-    p.name,
-    fmtINR(p.total).replace('₹ ', '')
+  body.push([
+    { content: 'SUBTOTAL', colSpan: 5, styles: { halign:'right', fontStyle:'bold', fillColor:[241,243,245] }},
+    { content: fmtINR(grandBase).replace('₹ ',''), styles: { halign:'right', fontStyle:'bold', fillColor:[241,243,245] }}
   ]);
-
-  const margin = grandBase * ((d.margin || 0) / 100);
-  const afterMargin = grandBase + margin;
-  const gst = afterMargin * ((d.gst || 0) / 100);
-  const final = afterMargin + gst;
-
-  summaryBody.push([
-    { content: 'SUBTOTAL (BASE COST)', colSpan: 2, styles: { halign:'right', fontStyle:'bold' }},
-    { content: fmtINR(grandBase).replace('₹ ',''), styles: { halign:'right', fontStyle:'bold' }}
-  ]);
-  summaryBody.push([
-    { content: `MARGIN @ ${d.margin || 0}%`, colSpan: 2, styles: { halign:'right' }},
-    { content: fmtINR(margin).replace('₹ ',''), styles: { halign:'right' }}
-  ]);
-  summaryBody.push([
-    { content: `GST @ ${d.gst || 0}%`, colSpan: 2, styles: { halign:'right' }},
+  body.push([
+    { content: `GST @ ${gstPct}%`, colSpan: 5, styles: { halign:'right' }},
     { content: fmtINR(gst).replace('₹ ',''), styles: { halign:'right' }}
   ]);
-  summaryBody.push([
-    { content: 'GRAND TOTAL', colSpan: 2, styles: { halign:'right', fontStyle:'bold', fillColor:[0,43,95], textColor:[255,255,255], fontSize: 11 }},
-    { content: fmtINR(final).replace('₹ ',''), styles: { halign:'right', fontStyle:'bold', fillColor:[0,43,95], textColor:[255,255,255], fontSize: 11 }}
+  body.push([
+    { content: 'GRAND TOTAL', colSpan: 5, styles: { halign:'right', fontStyle:'bold', fillColor:[0,43,95], textColor:[255,255,255], fontSize: 11 }},
+    { content: fmtINR(finalTotal).replace('₹ ',''), styles: { halign:'right', fontStyle:'bold', fillColor:[0,43,95], textColor:[255,255,255], fontSize: 11 }}
   ]);
 
   doc.autoTable({
-    startY: ySum,
-    head: [['SL', 'PARAMETER', 'TOTAL (₹)']],
-    body: summaryBody,
+    startY: y,
+    head: [['SL','PARAMETER','QTY','UNIT','UNIT COST (₹)','TOTAL (₹)']],
+    body,
     theme: 'grid',
     styles: { fontSize: 10, cellPadding: 3, font: 'helvetica' },
     headStyles: { fillColor: [0, 43, 95], textColor: 255, fontStyle: 'bold' },
     columnStyles: {
-      0: { cellWidth: 14, halign: 'center' },
-      1: { cellWidth: 110 },
-      2: { cellWidth: 'auto', halign: 'right' }
+      0: { cellWidth: 10, halign:'center' },
+      1: { cellWidth: 84 },
+      2: { cellWidth: 22, halign: 'right' },
+      3: { cellWidth: 14, halign: 'center' },
+      4: { cellWidth: 28, halign: 'right' },
+      5: { cellWidth: 'auto', halign: 'right' }
     },
     margin: { left: 14, right: 14, bottom: 18 },
     didDrawPage: function() {
@@ -2561,13 +3314,12 @@ function buildPDF() {
     }
   });
 
-  // Synopsis
   if (d.area > 0) {
     let yEnd = doc.lastAutoTable.finalY + 8;
     doc.setFontSize(10); doc.setFont('helvetica','bold'); doc.setTextColor(0,43,95);
     doc.text('SYNOPSIS', 14, yEnd); yEnd += 5;
     doc.setFont('helvetica','normal'); doc.setTextColor(40); doc.setFontSize(9);
-    doc.text(`Total Area: ${fmtNum(d.area,0)} sqm  |  Per sqm: ${fmtINR(final/d.area)}  |  Per sqft: ${fmtINR(final/(d.area*10.7639))}`, 14, yEnd);
+    doc.text(`Total Area: ${fmtNum(d.area,0)} sqm  |  Per sqm: ${fmtINR(finalTotal/d.area)}  |  Per sqft: ${fmtINR(finalTotal/(d.area*10.7639))}`, 14, yEnd);
   }
 
   return doc;
@@ -2597,16 +3349,36 @@ async function saveToOneDrive() {
   }
 
   try {
+    ensureStep3Overrides();
+    // Compute step3Computed for analytics
+    const step3Computed = {};
+    getIncludedParams().forEach(p => {
+      if ((parseFloat(projectState.qtys[p])||0) <= 0) return;
+      const c = computeStep3ForParam(p);
+      const node = MASTER_DB[p];
+      step3Computed[p] = {
+        unit: (node && node.__unit) || 'MT',
+        unitPre: c.unitPre,
+        unitPostMargin: c.unitPostMargin,
+        unitRounded: c.unitRounded,
+        paramTotal: c.paramTotal,
+        roundingUnit: c.roundingUnit
+      };
+    });
     const doc = buildPDF();
     const pdfBase64 = doc.output('datauristring').split(',')[1];
 
     const jsonData = {
-      version: 4,
+      version: 5,
       savedAt: new Date().toISOString(),
       details: d,
       qtys: projectState.qtys,
       selections: projectState.selections,
-      siteSpecific: projectState.siteSpecific || {}
+      siteSpecific: projectState.siteSpecific || {},
+      included: projectState.included || {},
+      step3: projectState.step3 || {},
+      step3Computed,
+      customerQuote: projectState.customerQuote || { descriptions: {} }
     };
 
     const res = await fetch(`${RENDER_URL}/api/save-quotation`, {
@@ -2727,6 +3499,9 @@ function showAddParameterModal() {
   });
   document.getElementById('newParamName').value = '';
   document.getElementById('newParamUnit').value = 'MT';
+  // Reset rounding radio to default 100
+  const r100 = document.querySelector('input[name="newParamRounding"][value="100"]');
+  if (r100) r100.checked = true;
   // Reset state holder for options
   window._newParamOptions = {};
   renderNewParamOptionsArea();
@@ -2824,6 +3599,8 @@ async function submitAddParameter() {
   captureNewParamOptions();
   const name = document.getElementById('newParamName').value.trim();
   const unit = document.getElementById('newParamUnit').value;
+  const roundingRadio = document.querySelector('input[name="newParamRounding"]:checked');
+  const roundingUnit = roundingRadio ? parseInt(roundingRadio.value, 10) : 100;
   const subs = [...document.querySelectorAll('#newParamSubcats input:checked')].map(cb => cb.value);
 
   if (!name) { toast('Parameter name required', 'err'); return; }
@@ -2857,7 +3634,7 @@ async function submitAddParameter() {
     if (adminPassword) headers['x-admin-password'] = adminPassword;
     const res = await fetch(`${RENDER_URL}/api/add-parameter`, {
       method: 'POST', headers,
-      body: JSON.stringify({ paramName: name, unit, subcategories: subs, options: optionsPayload })
+      body: JSON.stringify({ paramName: name, unit, subcategories: subs, options: optionsPayload, roundingUnit })
     });
     const data = await res.json();
     if (res.status === 401) {

@@ -81,7 +81,7 @@ const BOOTSTRAP_PAINT = [
 
 // Required columns in the canonical order. If any are missing from the sheet,
 // they get added to the header on bootstrap.
-const REQUIRED_COLUMNS = ['Parameter Name','Subcategory','Option ID','Option Name','Rate','Type','Unit','Min','Max','Group','Remark'];
+const REQUIRED_COLUMNS = ['Parameter Name','Subcategory','Option ID','Option Name','Rate','Type','Unit','Min','Max','Group','Remark','Rounding Unit'];
 
 // Write rows back to OneDrive, preserving column order.
 // Uses raw fetch (not Graph SDK) so we have full control over Content-Type — the SDK
@@ -235,6 +235,12 @@ app.get('/api/master-data', async (req, res) => {
             if (!formattedData[paramName].__unit && row['Unit']) {
                 formattedData[paramName].__unit = row['Unit'];
             }
+            // Rounding Unit: param-level metadata (10 or 100; blank for globals).
+            // Pick up the first non-blank value seen for the parameter.
+            if (formattedData[paramName].__roundingUnit == null && row['Rounding Unit'] !== undefined && row['Rounding Unit'] !== '') {
+                const ru = Number(row['Rounding Unit']);
+                if (ru === 10 || ru === 100) formattedData[paramName].__roundingUnit = ru;
+            }
             if (!formattedData[paramName].subs[subcat]) formattedData[paramName].subs[subcat] = [];
 
             const rate = row['Rate'] !== undefined ? row['Rate']
@@ -285,21 +291,57 @@ app.post('/api/save-quotation', async (req, res) => {
         }
 
         const targetEmail = process.env.TARGET_USER_EMAIL;
-        // Filename = client_project_date (client first; project + date follow for uniqueness)
-        const parts = [];
+        // Base filename = client_project_date (client first; project + date follow)
+        const fileParts = [];
         if (clientName && String(clientName).trim() && String(clientName).trim() !== '—') {
-            parts.push(sanitizeName(clientName));
+            fileParts.push(sanitizeName(clientName));
         }
-        parts.push(sanitizeName(projectName));
-        parts.push(sanitizeName(date));
-        const safeName = parts.join('_');
-        const results = {};
+        fileParts.push(sanitizeName(projectName));
+        fileParts.push(sanitizeName(date));
+        const baseName = fileParts.join('_');
 
-        // Save PDF
+        // Per-project folder name = client_project (no date) — groups all revisions of same project
+        const projectFolderParts = [];
+        if (clientName && String(clientName).trim() && String(clientName).trim() !== '—') {
+            projectFolderParts.push(sanitizeName(clientName));
+        }
+        projectFolderParts.push(sanitizeName(projectName));
+        const projectFolder = projectFolderParts.join('_');
+
+        // Revision detection (PER-PROJECT scope): look inside <projectFolder>/PDF/ for existing baseName(_Rn).pdf
+        let safeName = baseName;
+        try {
+            const pdfFolderPath = `:/Metfraa_Costing_App/Generated_Costings/${projectFolder}/PDF:`;
+            const listing = await graphClient
+                .api(`/users/${targetEmail}/drive/root${pdfFolderPath}/children`)
+                .top(200)
+                .get();
+            const existing = (listing.value || [])
+                .filter(f => f.file && f.name && f.name.toLowerCase().endsWith('.pdf'))
+                .map(f => f.name.replace(/\.pdf$/i, ''));
+            const escBase = baseName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const re = new RegExp(`^${escBase}(?:_R(\\d+))?$`, 'i');
+            let maxRev = -1;
+            existing.forEach(n => {
+                const m = n.match(re);
+                if (m) {
+                    const rev = m[1] ? parseInt(m[1], 10) : 0;
+                    if (rev > maxRev) maxRev = rev;
+                }
+            });
+            if (maxRev >= 0) safeName = `${baseName}_R${maxRev + 1}`;
+        } catch (listErr) {
+            // Folder doesn't exist yet — first save, use baseName as-is
+            console.log(`First save for project "${projectFolder}" — folder will be auto-created.`);
+        }
+
+        const results = { revision: safeName === baseName ? 0 : parseInt(safeName.match(/_R(\d+)$/i)[1], 10), projectFolder };
+
+        // Save PDF inside <projectFolder>/PDF/
         if (pdfBase64) {
             const cleanB64 = pdfBase64.replace(/^data:application\/pdf;base64,/, '');
             const pdfBuffer = Buffer.from(cleanB64, 'base64');
-            const pdfPath = `:/Metfraa_Costing_App/Generated_Costings/PDF/${safeName}.pdf:`;
+            const pdfPath = `:/Metfraa_Costing_App/Generated_Costings/${projectFolder}/PDF/${safeName}.pdf:`;
             const pdfResult = await graphClient
                 .api(`/users/${targetEmail}/drive/root${pdfPath}/content`)
                 .header('Content-Type', 'application/pdf')
@@ -307,16 +349,19 @@ app.post('/api/save-quotation', async (req, res) => {
             results.pdf = { fileName: `${safeName}.pdf`, webUrl: pdfResult.webUrl || null };
         }
 
-        // Save JSON
+        // Save JSON inside <projectFolder>/JSON/
         if (jsonData) {
             const jsonString = typeof jsonData === 'string' ? jsonData : JSON.stringify(jsonData, null, 2);
-            const jsonPath = `:/Metfraa_Costing_App/Generated_Costings/JSON/${safeName}.json:`;
+            const jsonPath = `:/Metfraa_Costing_App/Generated_Costings/${projectFolder}/JSON/${safeName}.json:`;
             const jsonResult = await graphClient
                 .api(`/users/${targetEmail}/drive/root${jsonPath}/content`)
                 .header('Content-Type', 'application/json')
                 .put(jsonString);
             results.json = { fileName: `${safeName}.json`, webUrl: jsonResult.webUrl || null };
         }
+
+        // Append a row to the centralised analytics Excel (Build E)
+        try { await appendAnalyticsRow(jsonData, safeName, projectFolder); } catch (_) {}
 
         res.json({ success: true, ...results });
     } catch (error) {
@@ -328,6 +373,332 @@ app.post('/api/save-quotation', async (req, res) => {
         });
     }
 });
+
+// =============================================================
+// ROUTE: List all projects (each is a folder under Generated_Costings/)
+// Returns: [{ name, revisionCount, lastModified }]
+// =============================================================
+app.get('/api/list-projects', async (req, res) => {
+    try {
+        const targetEmail = process.env.TARGET_USER_EMAIL;
+        const root = ':/Metfraa_Costing_App/Generated_Costings:';
+        let listing;
+        try {
+            listing = await graphClient
+                .api(`/users/${targetEmail}/drive/root${root}/children`)
+                .top(500)
+                .get();
+        } catch (e) {
+            return res.json({ success: true, projects: [] });
+        }
+        // Each folder is one project. Skip files (legacy flat layout) and the analytics folder.
+        const folders = (listing.value || []).filter(f =>
+            f.folder && f.name && !f.name.startsWith('_') && f.name.toLowerCase() !== 'pdf' && f.name.toLowerCase() !== 'json'
+        );
+        // For each project folder, count revisions inside PDF subfolder
+        const projects = [];
+        for (const folder of folders) {
+            let revCount = 0;
+            let lastMod = folder.lastModifiedDateTime;
+            try {
+                const pdfList = await graphClient
+                    .api(`/users/${targetEmail}/drive/root:/Metfraa_Costing_App/Generated_Costings/${folder.name}/PDF:/children`)
+                    .top(200)
+                    .get();
+                const pdfs = (pdfList.value || []).filter(f => f.file && f.name.toLowerCase().endsWith('.pdf'));
+                revCount = pdfs.length;
+                if (pdfs.length > 0) {
+                    const latest = pdfs.reduce((a,b) => new Date(a.lastModifiedDateTime) > new Date(b.lastModifiedDateTime) ? a : b);
+                    lastMod = latest.lastModifiedDateTime;
+                }
+            } catch (_) {
+                // PDF subfolder may not exist for an empty project
+            }
+            projects.push({ name: folder.name, revisionCount: revCount, lastModified: lastMod });
+        }
+        projects.sort((a,b) => new Date(b.lastModified) - new Date(a.lastModified));
+        res.json({ success: true, projects });
+    } catch (error) {
+        console.error('list-projects error:', error.message);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// =============================================================
+// ROUTE: List all revisions for a specific project
+// Query: ?project=<folderName>
+// Returns: [{ name, revisionNumber, lastModified, hasJson }]
+// =============================================================
+app.get('/api/list-project-revisions', async (req, res) => {
+    try {
+        const project = req.query.project;
+        if (!project) return res.status(400).json({ success: false, error: 'Missing project query param' });
+        const targetEmail = process.env.TARGET_USER_EMAIL;
+
+        // List PDFs
+        let pdfs = [];
+        try {
+            const pdfList = await graphClient
+                .api(`/users/${targetEmail}/drive/root:/Metfraa_Costing_App/Generated_Costings/${project}/PDF:/children`)
+                .top(200)
+                .get();
+            pdfs = (pdfList.value || []).filter(f => f.file && f.name.toLowerCase().endsWith('.pdf'));
+        } catch (_) {}
+
+        // List JSONs to check which revisions have a JSON
+        let jsons = new Set();
+        try {
+            const jsonList = await graphClient
+                .api(`/users/${targetEmail}/drive/root:/Metfraa_Costing_App/Generated_Costings/${project}/JSON:/children`)
+                .top(200)
+                .get();
+            (jsonList.value || []).forEach(f => {
+                if (f.file && f.name.toLowerCase().endsWith('.json')) {
+                    jsons.add(f.name.replace(/\.json$/i, ''));
+                }
+            });
+        } catch (_) {}
+
+        const revisions = pdfs.map(f => {
+            const baseName = f.name.replace(/\.pdf$/i, '');
+            const m = baseName.match(/_R(\d+)$/i);
+            return {
+                name: baseName,
+                fileName: f.name,
+                revisionNumber: m ? parseInt(m[1], 10) : 0,
+                lastModified: f.lastModifiedDateTime,
+                size: f.size,
+                hasJson: jsons.has(baseName),
+                webUrl: f.webUrl || null
+            };
+        }).sort((a, b) => a.revisionNumber - b.revisionNumber);
+
+        res.json({ success: true, project, revisions });
+    } catch (error) {
+        console.error('list-project-revisions error:', error.message);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// =============================================================
+// ROUTE: Get a specific revision's JSON content (for loading or viewing)
+// Query: ?project=<folder>&revision=<baseName>
+// =============================================================
+app.get('/api/get-project-revision', async (req, res) => {
+    try {
+        const { project, revision } = req.query;
+        if (!project || !revision) {
+            return res.status(400).json({ success: false, error: 'Missing project or revision' });
+        }
+        const targetEmail = process.env.TARGET_USER_EMAIL;
+        const path = `:/Metfraa_Costing_App/Generated_Costings/${project}/JSON/${revision}.json:`;
+        const content = await graphClient
+            .api(`/users/${targetEmail}/drive/root${path}/content`)
+            .get();
+        const text = typeof content === 'string' ? content : (content?.toString?.() || '');
+        let parsed = null;
+        try { parsed = JSON.parse(text); } catch (e) {
+            return res.status(500).json({ success: false, error: 'Saved JSON is not valid: ' + e.message });
+        }
+        res.json({ success: true, project, revision, data: parsed });
+    } catch (error) {
+        console.error('get-project-revision error:', error.message);
+        res.status(error.statusCode || 500).json({ success: false, error: error.message });
+    }
+});
+
+// =============================================================
+// ROUTE: Get a specific revision's PDF (returns base64) for in-app viewing
+// Query: ?project=<folder>&revision=<baseName>
+// =============================================================
+// =============================================================
+// ROUTE: Save Customer Quote PDF inside per-project Customer Quotes folder
+// Body: { projectName, clientName, date, pdfBase64 }
+// =============================================================
+app.post('/api/save-customer-quote', async (req, res) => {
+    try {
+        const { projectName, clientName, date, pdfBase64 } = req.body;
+        if (!projectName || !date || !pdfBase64) {
+            return res.status(400).json({ success: false, error: 'Missing projectName, date, or pdfBase64' });
+        }
+        const targetEmail = process.env.TARGET_USER_EMAIL;
+
+        const projectFolderParts = [];
+        if (clientName && String(clientName).trim() && String(clientName).trim() !== '—') {
+            projectFolderParts.push(sanitizeName(clientName));
+        }
+        projectFolderParts.push(sanitizeName(projectName));
+        const projectFolder = projectFolderParts.join('_');
+
+        const dateSafe = sanitizeName(date);
+        const baseName = dateSafe;
+
+        // Revision detection inside <projectFolder>/Customer Quotes/
+        let safeName = baseName;
+        try {
+            const folderPath = `:/Metfraa_Costing_App/Generated_Costings/${projectFolder}/Customer Quotes:`;
+            const listing = await graphClient
+                .api(`/users/${targetEmail}/drive/root${folderPath}/children`)
+                .top(200)
+                .get();
+            const existing = (listing.value || [])
+                .filter(f => f.file && f.name && f.name.toLowerCase().endsWith('.pdf'))
+                .map(f => f.name.replace(/\.pdf$/i, ''));
+            const escBase = baseName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const re = new RegExp(`^${escBase}(?:_R(\\d+))?$`, 'i');
+            let maxRev = -1;
+            existing.forEach(n => {
+                const m = n.match(re);
+                if (m) {
+                    const rev = m[1] ? parseInt(m[1], 10) : 0;
+                    if (rev > maxRev) maxRev = rev;
+                }
+            });
+            if (maxRev >= 0) safeName = `${baseName}_R${maxRev + 1}`;
+        } catch (_) {
+            // First customer quote for this project
+        }
+
+        const cleanB64 = pdfBase64.replace(/^data:application\/pdf;base64,/, '');
+        const pdfBuffer = Buffer.from(cleanB64, 'base64');
+        const pdfPath = `:/Metfraa_Costing_App/Generated_Costings/${projectFolder}/Customer Quotes/${safeName}.pdf:`;
+        const pdfResult = await graphClient
+            .api(`/users/${targetEmail}/drive/root${pdfPath}/content`)
+            .header('Content-Type', 'application/pdf')
+            .put(pdfBuffer);
+
+        res.json({
+            success: true,
+            fileName: `${safeName}.pdf`,
+            projectFolder,
+            webUrl: pdfResult.webUrl || null,
+            revision: safeName === baseName ? 0 : parseInt(safeName.match(/_R(\d+)$/i)[1], 10)
+        });
+    } catch (error) {
+        console.error('save-customer-quote error:', error.message);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+app.get('/api/get-project-revision-pdf', async (req, res) => {
+    try {
+        const { project, revision } = req.query;
+        if (!project || !revision) {
+            return res.status(400).json({ success: false, error: 'Missing project or revision' });
+        }
+        const targetEmail = process.env.TARGET_USER_EMAIL;
+        const path = `:/Metfraa_Costing_App/Generated_Costings/${project}/PDF/${revision}.pdf:`;
+        const stream = await graphClient
+            .api(`/users/${targetEmail}/drive/root${path}/content`)
+            .responseType('arraybuffer')
+            .get();
+        const buf = Buffer.from(stream);
+        res.json({ success: true, base64: buf.toString('base64') });
+    } catch (error) {
+        console.error('get-project-revision-pdf error:', error.message);
+        res.status(error.statusCode || 500).json({ success: false, error: error.message });
+    }
+});
+
+// =============================================================
+// Centralised analytics Excel (Build E)
+// Appends one row per parameter per saved quote to:
+// /Metfraa_Costing_App/Generated_Costings/_Analytics/cost_history.xlsx
+// =============================================================
+const ANALYTICS_PATH = ':/Metfraa_Costing_App/Generated_Costings/_Analytics/cost_history.xlsx:';
+const ANALYTICS_HEADERS = [
+    'Saved At', 'Client', 'Project', 'Revision', 'Project Folder', 'File Name',
+    'Quote Ref', 'Quote Date', 'Location', 'Distance (km)',
+    'Parameter', 'Qty', 'Unit', 'Pre-Margin Unit', 'Margin %',
+    'Post-Margin Unit', 'Rounded Unit', 'Rounding To', 'Param Total'
+];
+
+async function appendAnalyticsRow(jsonData, savedFileName, projectFolder) {
+    if (!jsonData) return;
+    const data = typeof jsonData === 'string' ? JSON.parse(jsonData) : jsonData;
+    if (!data || !data.details) return;
+    const d = data.details || {};
+    const step3 = data.step3 || {};
+    const qtys = data.qtys || {};
+    const savedAt = data.savedAt || new Date().toISOString();
+    const revMatch = savedFileName.match(/_R(\d+)$/i);
+    const revision = revMatch ? parseInt(revMatch[1], 10) : 0;
+
+    // Build rows: one per parameter that has qty > 0
+    const rowsToAppend = [];
+    Object.keys(qtys).forEach(p => {
+        const q = parseFloat(qtys[p]) || 0;
+        if (q <= 0) return;
+        // We can only compute final values if the saved JSON has step3 overrides;
+        // otherwise we record what we know.
+        const ov = step3[p] || {};
+        const margin = ov.margin != null ? ov.margin : (d.margin || 0);
+        const roundEnabled = ov.roundEnabled !== false;
+        // We don't have MASTER_DB context here so we can't re-derive unit cost.
+        // Use whatever's stored in `data.step3Computed` if the client populated it.
+        const comp = (data.step3Computed && data.step3Computed[p]) || {};
+        rowsToAppend.push([
+            savedAt,
+            d.client || '',
+            d.name || '',
+            revision,
+            projectFolder || '',
+            savedFileName,
+            d.ref || '',
+            d.date || '',
+            d.loc || '',
+            d.dist || 0,
+            p,
+            q,
+            comp.unit || '',
+            comp.unitPre != null ? Math.round(comp.unitPre) : '',
+            margin,
+            comp.unitPostMargin != null ? Math.round(comp.unitPostMargin) : '',
+            comp.unitRounded != null ? Math.round(comp.unitRounded) : '',
+            roundEnabled ? (comp.roundingUnit || '') : 'off',
+            comp.paramTotal != null ? Math.round(comp.paramTotal) : ''
+        ]);
+    });
+    if (rowsToAppend.length === 0) return;
+
+    const targetEmail = process.env.TARGET_USER_EMAIL;
+
+    // Try to download existing analytics file; if absent, create new
+    let workbook;
+    let isNew = false;
+    try {
+        const existing = await graphClient
+            .api(`/users/${targetEmail}/drive/root${ANALYTICS_PATH}/content`)
+            .responseType('arraybuffer')
+            .get();
+        workbook = xlsx.read(Buffer.from(existing), { type: 'buffer' });
+    } catch (e) {
+        isNew = true;
+        workbook = xlsx.utils.book_new();
+    }
+
+    let sheet = workbook.Sheets['Analytics'];
+    let existingData = [];
+    if (sheet) {
+        existingData = xlsx.utils.sheet_to_json(sheet, { header: 1 });
+    }
+    if (existingData.length === 0) {
+        existingData.push(ANALYTICS_HEADERS);
+    }
+    rowsToAppend.forEach(r => existingData.push(r));
+
+    const newSheet = xlsx.utils.aoa_to_sheet(existingData);
+    if (workbook.Sheets['Analytics']) {
+        workbook.Sheets['Analytics'] = newSheet;
+    } else {
+        xlsx.utils.book_append_sheet(workbook, newSheet, 'Analytics');
+    }
+    const buf = xlsx.write(workbook, { bookType: 'xlsx', type: 'buffer' });
+    await graphClient
+        .api(`/users/${targetEmail}/drive/root${ANALYTICS_PATH}/content`)
+        .header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+        .put(buf);
+}
 
 // =============================================================
 // 3. ROUTE: Load Quotation by reference
@@ -399,6 +770,72 @@ app.get('/api/load-quotation', async (req, res) => {
 // =============================================================
 // 4. ROUTE: List all saved quotations
 // =============================================================
+// =============================================================
+// ROUTE: Auto-generate the next quote number by scanning saved JSON files
+// for the highest existing Met/est/<N>/<YYYY> ref and returning N+1.
+// =============================================================
+app.get('/api/next-quote-number', async (req, res) => {
+    try {
+        const targetEmail = process.env.TARGET_USER_EMAIL;
+        const folderPath = ':/Metfraa_Costing_App/Generated_Costings/JSON:';
+        let listing;
+        try {
+            listing = await graphClient
+                .api(`/users/${targetEmail}/drive/root${folderPath}/children`)
+                .top(500)
+                .get();
+        } catch (listErr) {
+            // Folder doesn't exist yet — start from 1
+            const year = new Date().getFullYear();
+            return res.json({ success: true, quoteRef: `Met/est/01/${year}`, sequence: 1 });
+        }
+
+        const files = (listing.value || [])
+            .filter(f => f.file && f.name && f.name.toLowerCase().endsWith('.json'));
+
+        // Need to peek inside each JSON for the embedded `details.ref` since
+        // filenames don't contain the quote ref. Limit to recent 30 to keep it fast.
+        const recent = files
+            .sort((a, b) => new Date(b.lastModifiedDateTime) - new Date(a.lastModifiedDateTime))
+            .slice(0, 30);
+
+        let maxSeq = 0;
+        let yearOfMax = new Date().getFullYear();
+        for (const f of recent) {
+            try {
+                const content = await graphClient
+                    .api(`/users/${targetEmail}/drive/items/${f.id}/content`)
+                    .get();
+                const text = typeof content === 'string' ? content : content?.toString?.() || '';
+                let parsed = null;
+                try { parsed = JSON.parse(text); } catch (_) { continue; }
+                const ref = parsed?.details?.ref || '';
+                // Match Met/est/<seq>/<year>  e.g. Met/est/273/2026
+                const m = String(ref).match(/met\/est\/(\d+)\/(\d{4})/i);
+                if (m) {
+                    const seq = parseInt(m[1], 10);
+                    const yr = parseInt(m[2], 10);
+                    if (seq > maxSeq) { maxSeq = seq; yearOfMax = yr; }
+                }
+            } catch (_) {
+                continue;
+            }
+        }
+
+        const currentYear = new Date().getFullYear();
+        // If max-year is older than this year, reset to 1 for the new year (optional);
+        // current behaviour: continue the sequence regardless of year.
+        const nextSeq = maxSeq + 1;
+        // Pad to at least 2 digits, but don't shrink longer numbers (e.g. 273 stays 273)
+        const padded = nextSeq < 10 ? `0${nextSeq}` : String(nextSeq);
+        const quoteRef = `Met/est/${padded}/${currentYear}`;
+        res.json({ success: true, quoteRef, sequence: nextSeq, previousMax: maxSeq });
+    } catch (error) {
+        console.error('Next Quote Number Error:', error.message);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
 app.get('/api/list-quotations', async (req, res) => {
     try {
         const targetEmail = process.env.TARGET_USER_EMAIL;
@@ -623,9 +1060,10 @@ app.post('/api/add-master-row', async (req, res) => {
         const sheet = workbook.Sheets[sheetName];
         const rawData = xlsx.utils.sheet_to_json(sheet);
 
-        // Generate a unique Option ID. Use the param's first 4 chars + sub's first 2 chars + N
+        // Generate a unique Option ID. Use the param's first 4 chars + disambiguated
+        // 4-letter sub slug (FIXC/FIXD/FIXR/FIXT/FIXG distinguish the four Fix- subcats).
         const cleanP = paramName.replace(/^\d+\.\s*/, '').replace(/[^A-Z0-9]/gi, '').toUpperCase().slice(0, 4) || 'CUST';
-        const cleanS = subcategory.replace(/[^A-Z0-9]/gi, '').toUpperCase().slice(0, 2) || 'XX';
+        const cleanS = subSlug(subcategory);
         const allIds = new Set(rawData.map(r => String(r['Option ID'] || '')));
         let n = 1;
         let newId;
@@ -671,6 +1109,33 @@ app.post('/api/add-master-row', async (req, res) => {
 const AUTO_SUBCATS = new Set(['TRANSPORT OUTWARD', 'FINISHING', 'FIXING / ERECTION']);
 const GLOBAL_PARAM_MARKERS = ['distance', 'paint', 'erection safety', 'erection height'];
 
+// Disambiguating 4-letter slugs so that subcategories starting with "Fix..."
+// don't all collide on the same prefix. Used when generating Option IDs.
+const SUB_SLUG_4 = {
+    'RM COST': 'RMCO',
+    'WASTAGES / OVERLAP': 'WAST',
+    'TRANSPORT OUTWARD': 'TRAN',
+    'FIXED CHARGES (CONVERSION)': 'FIXC',
+    'FIXED CHARGES (DESIGN)':     'FIXD',
+    'SHOT BLAST':                 'SHOT',
+    'FINISHING':                  'FINI',
+    'FIXING / ERECTION':          'FIXR',
+    'FIXTURES / HARDWARE':        'FIXT',
+    'FIXING CHARGES':             'FIXG',
+    'ACCESSORIES':                'ACCE',
+    'DISTANCE BAND':              'DBND',
+    'PAINT TYPE':                 'PNT',
+    'SAFETY TYPE':                'SAFE',
+    'HEIGHT BAND':                'HBND',
+};
+
+function subSlug(sub) {
+    const key = String(sub || '').trim().toUpperCase();
+    if (SUB_SLUG_4[key]) return SUB_SLUG_4[key];
+    // Fallback: first 4 alnum chars
+    return (String(sub || '').replace(/[^A-Z0-9]/gi, '').toUpperCase().slice(0, 4)) || 'XSUB';
+}
+
 function isGlobalParamName(name) {
     const s = String(name || '').trim().toLowerCase().replace(/^\d+\.\s*/, '');
     return GLOBAL_PARAM_MARKERS.some(m => s === m || s.startsWith(m));
@@ -680,9 +1145,12 @@ app.post('/api/add-parameter', async (req, res) => {
     try {
         if (!isAdmin(req)) return res.status(401).json({ success: false, error: 'Unauthorised' });
 
-        let { paramName, unit, subcategories, options } = req.body;
+        let { paramName, unit, subcategories, options, roundingUnit } = req.body;
         paramName = String(paramName || '').trim();
         unit = String(unit || 'MT').trim();
+        // Rounding Unit: must be 10 or 100. Default 100 if not specified.
+        const ru = Number(roundingUnit);
+        const finalRounding = (ru === 10 || ru === 100) ? ru : 100;
         if (!Array.isArray(subcategories)) subcategories = [];
         subcategories = subcategories.map(s => String(s || '').trim()).filter(Boolean);
         // options is an optional map: { "RM COST": [{name, rate, type, group, remark}, ...], ... }
@@ -718,7 +1186,7 @@ app.post('/api/add-parameter', async (req, res) => {
         const newRows = [];
         subcategories.forEach(sub => {
             const isAuto = AUTO_SUBCATS.has(sub.toUpperCase().trim());
-            const s3 = sub.replace(/[^A-Z0-9]/gi, '').toUpperCase().slice(0, 3) || 'XX';
+            const s3 = subSlug(sub);
             const subOpts = Array.isArray(options[sub]) ? options[sub].filter(o => o && (o.name || o.rate)) : [];
 
             if (isAuto) {
@@ -733,7 +1201,8 @@ app.post('/api/add-parameter', async (req, res) => {
                     'Type': 'AUTO',
                     'Min': '', 'Max': '',
                     'Group': '',
-                    'Remark': 'Filled from Step 1 selection'
+                    'Remark': 'Filled from Step 1 selection',
+                    'Rounding Unit': finalRounding
                 });
                 return;
             }
@@ -750,7 +1219,8 @@ app.post('/api/add-parameter', async (req, res) => {
                     'Type': 'RATE',
                     'Min': '', 'Max': '',
                     'Group': '',
-                    'Remark': ''
+                    'Remark': '',
+                    'Rounding Unit': finalRounding
                 });
                 return;
             }
@@ -768,7 +1238,8 @@ app.post('/api/add-parameter', async (req, res) => {
                     'Type': type,
                     'Min': '', 'Max': '',
                     'Group': String(o.group || '').trim(),
-                    'Remark': String(o.remark || '').trim()
+                    'Remark': String(o.remark || '').trim(),
+                    'Rounding Unit': finalRounding
                 });
             });
         });
