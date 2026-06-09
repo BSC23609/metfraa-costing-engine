@@ -495,10 +495,19 @@ app.get('/api/get-project-revision', async (req, res) => {
         const content = await graphClient
             .api(`/users/${targetEmail}/drive/root${path}/content`)
             .get();
-        const text = typeof content === 'string' ? content : (content?.toString?.() || '');
-        let parsed = null;
-        try { parsed = JSON.parse(text); } catch (e) {
-            return res.status(500).json({ success: false, error: 'Saved JSON is not valid: ' + e.message });
+        // Graph SDK auto-parses JSON files (it reads Content-Type and decodes the body),
+        // so `content` may already be a JS object. Otherwise treat it as text and parse.
+        let parsed;
+        if (content && typeof content === 'object' && !Buffer.isBuffer(content)) {
+            parsed = content;
+        } else {
+            const text = typeof content === 'string' ? content
+                       : Buffer.isBuffer(content) ? content.toString('utf8')
+                       : String(content || '');
+            try { parsed = JSON.parse(text); }
+            catch (e) {
+                return res.status(500).json({ success: false, error: 'Saved JSON is not valid: ' + e.message });
+            }
         }
         res.json({ success: true, project, revision, data: parsed });
     } catch (error) {
@@ -711,22 +720,48 @@ app.get('/api/load-quotation', async (req, res) => {
         const targetEmail = process.env.TARGET_USER_EMAIL;
         const safeRef = sanitizeName(ref);
 
-        const folderPath = ':/Metfraa_Costing_App/Generated_Costings/JSON:';
-        let listing;
+        // Walk per-project folders + legacy flat /JSON/ folder
+        const allFiles = [];
+        const rootPath = ':/Metfraa_Costing_App/Generated_Costings:';
+        let rootListing;
         try {
-            listing = await graphClient
-                .api(`/users/${targetEmail}/drive/root${folderPath}/children`)
+            rootListing = await graphClient
+                .api(`/users/${targetEmail}/drive/root${rootPath}/children`)
+                .top(500)
+                .get();
+        } catch (e) {
+            return res.status(404).json({ success: false, error: 'No saved quotations folder in OneDrive yet.' });
+        }
+        const projectFolders = (rootListing.value || []).filter(f =>
+            f.folder && f.name && !f.name.startsWith('_')
+        );
+        for (const pf of projectFolders) {
+            try {
+                const jl = await graphClient
+                    .api(`/users/${targetEmail}/drive/root:/Metfraa_Costing_App/Generated_Costings/${pf.name}/JSON:/children`)
+                    .top(200)
+                    .get();
+                (jl.value || []).forEach(f => {
+                    if (f.file && f.name && f.name.toLowerCase().endsWith('.json')) {
+                        allFiles.push(f);
+                    }
+                });
+            } catch (_) {}
+        }
+        // Legacy flat folder
+        try {
+            const flatList = await graphClient
+                .api(`/users/${targetEmail}/drive/root:/Metfraa_Costing_App/Generated_Costings/JSON:/children`)
                 .top(200)
                 .get();
-        } catch (listErr) {
-            return res.status(404).json({ success: false, error: 'JSON folder not found in OneDrive. Save a quotation first.' });
-        }
+            (flatList.value || []).forEach(f => {
+                if (f.file && f.name && f.name.toLowerCase().endsWith('.json')) {
+                    allFiles.push(f);
+                }
+            });
+        } catch (_) {}
 
-        const files = (listing.value || []).filter(f =>
-            f.file && f.name && f.name.toLowerCase().endsWith('.json')
-        );
-
-        let matches = files.filter(f =>
+        let matches = allFiles.filter(f =>
             f.name.toLowerCase().includes(safeRef.toLowerCase())
         );
 
@@ -735,7 +770,7 @@ app.get('/api/load-quotation', async (req, res) => {
                 success: false,
                 error: `No saved quotation found matching "${ref}"`,
                 searchedFor: safeRef,
-                available: files.map(f => f.name)
+                available: allFiles.map(f => f.name)
             });
         }
 
@@ -777,58 +812,88 @@ app.get('/api/load-quotation', async (req, res) => {
 app.get('/api/next-quote-number', async (req, res) => {
     try {
         const targetEmail = process.env.TARGET_USER_EMAIL;
-        const folderPath = ':/Metfraa_Costing_App/Generated_Costings/JSON:';
-        let listing;
+        const now = new Date();
+        const mm = String(now.getMonth() + 1).padStart(2, '0');
+        const yyyy = now.getFullYear();
+
+        // List all per-project folders under Generated_Costings/
+        const rootPath = ':/Metfraa_Costing_App/Generated_Costings:';
+        let rootListing;
         try {
-            listing = await graphClient
-                .api(`/users/${targetEmail}/drive/root${folderPath}/children`)
+            rootListing = await graphClient
+                .api(`/users/${targetEmail}/drive/root${rootPath}/children`)
                 .top(500)
                 .get();
         } catch (listErr) {
-            // Folder doesn't exist yet — start from 1
-            const year = new Date().getFullYear();
-            return res.json({ success: true, quoteRef: `Met/est/01/${year}`, sequence: 1 });
+            // Folder doesn't exist yet — start from 01
+            return res.json({ success: true, quoteRef: `Met/est/${mm}/${yyyy}/01`, sequence: 1 });
         }
 
-        const files = (listing.value || [])
-            .filter(f => f.file && f.name && f.name.toLowerCase().endsWith('.json'));
+        const projectFolders = (rootListing.value || []).filter(f =>
+            f.folder && f.name && !f.name.startsWith('_')
+        );
 
-        // Need to peek inside each JSON for the embedded `details.ref` since
-        // filenames don't contain the quote ref. Limit to recent 30 to keep it fast.
-        const recent = files
+        // Collect all JSON files across all project folders, then peek inside for refs.
+        // We scan up to ~50 recent JSON files total (across all projects) — quick but bounded.
+        const allJsonFiles = [];
+        for (const pf of projectFolders) {
+            try {
+                const jl = await graphClient
+                    .api(`/users/${targetEmail}/drive/root:/Metfraa_Costing_App/Generated_Costings/${pf.name}/JSON:/children`)
+                    .top(50)
+                    .get();
+                (jl.value || []).forEach(f => {
+                    if (f.file && f.name && f.name.toLowerCase().endsWith('.json')) {
+                        allJsonFiles.push(f);
+                    }
+                });
+            } catch (_) { /* JSON subfolder might not exist for this project */ }
+        }
+
+        // Sort by lastModified desc and limit to 50 most recent (sequence is monotonic so
+        // checking recent ones is sufficient to find the highest)
+        const recent = allJsonFiles
             .sort((a, b) => new Date(b.lastModifiedDateTime) - new Date(a.lastModifiedDateTime))
-            .slice(0, 30);
+            .slice(0, 50);
+
+        // Match BOTH the old format (Met/est/XX/YYYY) AND the new format (Met/est/MM/YYYY/XX)
+        // so legacy refs don't break sequencing.
+        // Old format: Met/est/01/2026   → 3 parts after Met/est, last is year
+        // New format: Met/est/06/2026/01 → 4 parts, last is sequence
+        const reNew = /met\/est\/(\d{1,2})\/(\d{4})\/(\d+)/i;
+        const reOld = /met\/est\/(\d+)\/(\d{4})/i;
 
         let maxSeq = 0;
-        let yearOfMax = new Date().getFullYear();
         for (const f of recent) {
             try {
                 const content = await graphClient
                     .api(`/users/${targetEmail}/drive/items/${f.id}/content`)
                     .get();
-                const text = typeof content === 'string' ? content : content?.toString?.() || '';
                 let parsed = null;
-                try { parsed = JSON.parse(text); } catch (_) { continue; }
-                const ref = parsed?.details?.ref || '';
-                // Match Met/est/<seq>/<year>  e.g. Met/est/273/2026
-                const m = String(ref).match(/met\/est\/(\d+)\/(\d{4})/i);
-                if (m) {
-                    const seq = parseInt(m[1], 10);
-                    const yr = parseInt(m[2], 10);
-                    if (seq > maxSeq) { maxSeq = seq; yearOfMax = yr; }
+                if (content && typeof content === 'object' && !Buffer.isBuffer(content)) {
+                    parsed = content; // SDK already parsed it
+                } else {
+                    const text = typeof content === 'string' ? content
+                              : Buffer.isBuffer(content) ? content.toString('utf8')
+                              : String(content || '');
+                    try { parsed = JSON.parse(text); } catch (_) { continue; }
                 }
-            } catch (_) {
-                continue;
-            }
+                const ref = String(parsed?.details?.ref || '');
+                let seq = 0;
+                const mNew = ref.match(reNew);
+                if (mNew) {
+                    seq = parseInt(mNew[3], 10);
+                } else {
+                    const mOld = ref.match(reOld);
+                    if (mOld) seq = parseInt(mOld[1], 10);
+                }
+                if (seq > maxSeq) maxSeq = seq;
+            } catch (_) { continue; }
         }
 
-        const currentYear = new Date().getFullYear();
-        // If max-year is older than this year, reset to 1 for the new year (optional);
-        // current behaviour: continue the sequence regardless of year.
         const nextSeq = maxSeq + 1;
-        // Pad to at least 2 digits, but don't shrink longer numbers (e.g. 273 stays 273)
         const padded = nextSeq < 10 ? `0${nextSeq}` : String(nextSeq);
-        const quoteRef = `Met/est/${padded}/${currentYear}`;
+        const quoteRef = `Met/est/${mm}/${yyyy}/${padded}`;
         res.json({ success: true, quoteRef, sequence: nextSeq, previousMax: maxSeq });
     } catch (error) {
         console.error('Next Quote Number Error:', error.message);
@@ -839,24 +904,58 @@ app.get('/api/next-quote-number', async (req, res) => {
 app.get('/api/list-quotations', async (req, res) => {
     try {
         const targetEmail = process.env.TARGET_USER_EMAIL;
-        const folderPath = ':/Metfraa_Costing_App/Generated_Costings/JSON:';
-        let listing;
+        // Walk per-project folders under Generated_Costings/, collecting JSON files from each
+        const rootPath = ':/Metfraa_Costing_App/Generated_Costings:';
+        let rootListing;
         try {
-            listing = await graphClient
-                .api(`/users/${targetEmail}/drive/root${folderPath}/children`)
-                .top(200)
+            rootListing = await graphClient
+                .api(`/users/${targetEmail}/drive/root${rootPath}/children`)
+                .top(500)
                 .get();
         } catch (listErr) {
             return res.json({ success: true, quotations: [] });
         }
-        const quotations = (listing.value || [])
-            .filter(f => f.file && f.name && f.name.toLowerCase().endsWith('.json'))
-            .map(f => ({
-                name: f.name.replace(/\.json$/i, ''),
-                lastModified: f.lastModifiedDateTime,
-                size: f.size
-            }))
-            .sort((a, b) => new Date(b.lastModified) - new Date(a.lastModified));
+        const projectFolders = (rootListing.value || []).filter(f =>
+            f.folder && f.name && !f.name.startsWith('_')
+        );
+        const quotations = [];
+        for (const pf of projectFolders) {
+            try {
+                const jl = await graphClient
+                    .api(`/users/${targetEmail}/drive/root:/Metfraa_Costing_App/Generated_Costings/${pf.name}/JSON:/children`)
+                    .top(200)
+                    .get();
+                (jl.value || []).forEach(f => {
+                    if (f.file && f.name && f.name.toLowerCase().endsWith('.json')) {
+                        quotations.push({
+                            name: f.name.replace(/\.json$/i, ''),
+                            project: pf.name,
+                            lastModified: f.lastModifiedDateTime,
+                            size: f.size
+                        });
+                    }
+                });
+            } catch (_) { /* JSON subfolder might not exist for some project */ }
+        }
+        // Also include legacy flat /JSON/ files if any exist (back-compat)
+        try {
+            const flatList = await graphClient
+                .api(`/users/${targetEmail}/drive/root:/Metfraa_Costing_App/Generated_Costings/JSON:/children`)
+                .top(200)
+                .get();
+            (flatList.value || []).forEach(f => {
+                if (f.file && f.name && f.name.toLowerCase().endsWith('.json')) {
+                    quotations.push({
+                        name: f.name.replace(/\.json$/i, ''),
+                        project: null, // legacy flat
+                        lastModified: f.lastModifiedDateTime,
+                        size: f.size
+                    });
+                }
+            });
+        } catch (_) { /* no legacy folder, fine */ }
+
+        quotations.sort((a, b) => new Date(b.lastModified) - new Date(a.lastModified));
         res.json({ success: true, quotations });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
