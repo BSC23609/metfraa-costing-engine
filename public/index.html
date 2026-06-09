@@ -138,6 +138,7 @@ body { font-family: 'Segoe UI', Tahoma, sans-serif; background: var(--brand-grey
     <button class="app-header-btn" id="projectsBtn" onclick="navProjects()" title="View saved projects and their revisions">📁 Projects</button>
     <button class="app-header-btn" id="settingsBtn" onclick="navSettings()">⚙ Settings</button>
     <img class="brand-logo" id="brandLogo" src="Metfraa.png" alt="METFRAA" onerror="this.style.display='none'">
+    <img id="groupLogo" src="Group_Logo.png" alt="" style="display:none;" onerror="this.style.display='none'">
   </div>
 </header>
 <div id="serverStatus">⏳ Connecting to Cloud Database...</div>
@@ -406,7 +407,7 @@ body { font-family: 'Segoe UI', Tahoma, sans-serif; background: var(--brand-grey
 
     <div class="load-panel">
       <span class="load-label">📂 Load Existing Quotation:</span>
-      <input type="text" id="loadRef" placeholder="Enter Quotation Ref or Project Name (e.g. Met/est/2026/01)">
+      <input type="text" id="loadRef" placeholder="Enter Quotation Ref or Project Name (e.g. Met/est/06/2026/01)">
       <button onclick="loadQuotation()">Load</button>
       <div class="hint">Loads the most recent saved quotation matching this reference. All fields will be auto-filled.</div>
     </div>
@@ -417,7 +418,7 @@ body { font-family: 'Segoe UI', Tahoma, sans-serif; background: var(--brand-grey
         <button class="btn btn-secondary" onclick="startNewQuote()" style="font-size:12px; padding:6px 14px;" title="Clear everything and start a fresh quote">📄 New Quote</button>
       </div>
       <div class="form-grid">
-        <div class="form-field"><label class="form-label">Quotation Ref</label><input type="text" id="projRef" class="form-input" placeholder="Met/est/2026/01"></div>
+        <div class="form-field"><label class="form-label">Quotation Ref</label><input type="text" id="projRef" class="form-input" placeholder="Met/est/06/2026/01"></div>
         <div class="form-field"><label class="form-label">Date</label><input type="date" id="projDate" class="form-input"></div>
         <div class="form-field"><label class="form-label">Project Name</label><input type="text" id="projName" class="form-input" placeholder="e.g. Gymnasium Indoor Shed"></div>
         <div class="form-field"><label class="form-label">Client Name</label><input type="text" id="projClient" class="form-input"></div>
@@ -562,19 +563,18 @@ body { font-family: 'Segoe UI', Tahoma, sans-serif; background: var(--brand-grey
   <!-- PAGE 6 — Export (was page4) -->
   <div id="page6" class="page">
     <div class="card">
-      <div class="section-title">Export Options</div>
-      <div class="export-grid">
-        <div class="export-card" onclick="downloadExcel()">📊<h3>Download Excel</h3></div>
-        <div class="export-card" onclick="downloadPDF()">📄<h3>Download PDF</h3></div>
-        <div class="export-card" id="saveBtn" onclick="saveToOneDrive()">☁️<h3>Save PDF + JSON to OneDrive</h3></div>
-        <div class="export-card" onclick="openCustomerQuote()" style="border:2px solid var(--brand-secondary);">📋<h3>Create Customer Quote</h3></div>
-      </div>
-      <div style="margin-top:20px; padding:14px; background:#f0f7ff; border-left:4px solid var(--brand-secondary); font-size:13px; color:#495057; border-radius:4px;">
-        <strong>💡 OneDrive Save:</strong> Saves to <code>Generated_Costings/&lt;Client&gt;_&lt;Project&gt;/</code> with PDF/ and JSON/ subfolders. Each save becomes the next revision (R1, R2, ...).<br>
-        <strong>📋 Customer Quote:</strong> Generates the Annexure-D style Bill of Quantities (one line per parameter with auto-built description) for the client.
+      <div class="section-title">Step 6 — Save & Proceed to Customer Quote</div>
+      <p style="font-size:13px; color:#666; margin-bottom:18px;">
+        Saves the detailed Costing Estimation PDF + JSON to OneDrive under <code>Generated_Costings/&lt;Client&gt;_&lt;Project&gt;/</code>. Each save creates the next revision (R1, R2, …). Once saved, you'll be taken to the Customer Quote screen.
+      </p>
+      <div style="text-align:center; padding:30px 0;">
+        <button class="btn btn-primary" id="saveAndProceedBtn" onclick="saveAndProceedToCustomerQuote()" style="padding:14px 28px; font-size:14px;">
+          ☁ Save to OneDrive & Proceed to Customer Quote ➔
+        </button>
+        <div id="saveAndProceedStatus" style="margin-top:14px; font-size:12px; color:#666;"></div>
       </div>
     </div>
-    <div class="btn-row"><button class="btn btn-secondary" onclick="location.reload()">+ New Project</button></div>
+    <div class="btn-row"><button class="btn btn-secondary" onclick="goToPage(5)">◀ Back to Preview</button></div>
   </div>
 
   <!-- CUSTOMER QUOTE PAGE -->
@@ -589,8 +589,7 @@ body { font-family: 'Segoe UI', Tahoma, sans-serif; background: var(--brand-grey
       </p>
       <div id="customerQuoteBody"></div>
       <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:20px;">
-        <button class="btn btn-secondary" onclick="downloadCustomerQuotePDF()" style="padding:8px 18px;">⬇ Download PDF</button>
-        <button class="btn btn-primary" onclick="saveCustomerQuoteToCloud()" id="saveCQBtn" style="padding:8px 18px;">☁ Save & Upload to OneDrive</button>
+        <button class="btn btn-primary" onclick="saveAndDownloadCustomerQuote()" id="saveCQBtn" style="padding:10px 22px; font-size:13px;">☁ Save PDF & Upload to OneDrive</button>
       </div>
     </div>
   </div>
@@ -1226,6 +1225,21 @@ window.onload = async () => {
     toast('🔄 Restored unsaved draft from local storage', 'ok', 4000);
     renderQtyTable && renderQtyTable();
     refreshSidebarStatus && refreshSidebarStatus();
+  } else {
+    // No draft restored — auto-populate the next quote number if the field is empty
+    const refEl = document.getElementById('projRef');
+    if (refEl && !refEl.value) {
+      try {
+        const res = await fetch(`${RENDER_URL}/api/next-quote-number`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.success && data.quoteRef) refEl.value = data.quoteRef;
+        }
+      } catch (_) { /* fail silently — user can type the ref manually */ }
+    }
+    // Default the date to today if empty
+    const dateEl = document.getElementById('projDate');
+    if (dateEl && !dateEl.value) dateEl.value = new Date().toISOString().slice(0,10);
   }
 };
 
@@ -1763,12 +1777,18 @@ function renderCustomerQuote() {
 
   // Build HTML
   let html = `
+    <div style="text-align:center; padding:8px 0 14px; border-bottom:2px solid #002b5f; margin-bottom:14px;">
+      <div style="font-size:22px; font-weight:700; color:#002b5f; letter-spacing:1px;">ANNEXURE - D</div>
+      <div style="font-size:13px; color:#555; margin-top:2px;">Bill of Quantities</div>
+    </div>
     <div style="border:1px solid #ddd; padding:14px 18px; margin-bottom:14px; background:#fafafa; border-radius:6px;">
-      <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; font-size:13px;">
+      <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px 16px; font-size:13px;">
         <div><strong>Date:</strong> ${d.date || '—'}</div>
         <div><strong>Quote No:</strong> ${d.ref || '—'}</div>
         <div><strong>Client:</strong> ${escapeHtml(d.client || '—')}</div>
-        <div><strong>Project:</strong> ${escapeHtml(d.name || '—')}</div>
+        <div><strong>Location:</strong> ${escapeHtml(d.loc || '—')}</div>
+        <div><strong>Tonnage:</strong> ${fmtNum(d.tonnage || 0, 2)} MT</div>
+        <div><strong>Area:</strong> ${fmtNum(d.area || 0, 0)} sqm</div>
       </div>
     </div>
 
@@ -1838,52 +1858,35 @@ function buildCustomerQuotePDF() {
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF({ unit: 'mm', format: 'a4' });
   const pageW = doc.internal.pageSize.getWidth();
-  const pageH = doc.internal.pageSize.getHeight();
 
-  // Header: white band, dark text, logo on left, teal divider
-  doc.setFillColor(255,255,255);
-  doc.rect(0, 0, pageW, 32, 'F');
-  doc.setFillColor(0, 102, 179);
-  doc.rect(0, 32, pageW, 1.5, 'F');
+  // Draw header (Annexure-D variant) on page 1
+  let y = drawPdfHeader(doc, {
+    docType: 'annexureD',
+    client: d.client,
+    project: d.name
+  });
 
-  try {
-    const logo = document.getElementById('brandLogo');
-    if (logo && logo.complete && logo.naturalWidth > 0) {
-      const canvas = document.createElement('canvas');
-      canvas.width = logo.naturalWidth;
-      canvas.height = logo.naturalHeight;
-      canvas.getContext('2d').drawImage(logo, 0, 0);
-      const aspect = logo.naturalWidth / logo.naturalHeight;
-      doc.addImage(canvas.toDataURL('image/png'), 'PNG', 8, 5, 22 * aspect, 22);
-    }
-  } catch(e) {}
-
-  doc.setTextColor(0, 43, 95);
-  doc.setFont('helvetica','bold');
-  doc.setFontSize(14);
-  doc.text('Proposal for Construction of PEB building', pageW / 2, 12, { align: 'center' });
-  doc.setFontSize(11);
-  doc.text(d.client || '—', pageW / 2, 20, { align: 'center' });
-  doc.setFont('helvetica','normal');
-  doc.setFontSize(9);
-  doc.setTextColor(80,80,80);
-  doc.text(d.name || '—', pageW / 2, 26, { align: 'center' });
-
-  // Project bar
-  let y = 40;
+  // Project info strip — 6 fields (Date, Quote No, Client, Location, Tonnage, Area)
   doc.setTextColor(0,0,0);
-  doc.setFontSize(9);
-  doc.setFont('helvetica','bold');
-  doc.text(`Date:`, 14, y); doc.setFont('helvetica','normal'); doc.text(d.date || '—', 28, y);
-  doc.setFont('helvetica','bold'); doc.text(`Quote No:`, pageW - 90, y);
-  doc.setFont('helvetica','normal'); doc.text(d.ref || '—', pageW - 70, y);
+  doc.setFontSize(8);
+  // Row 1
+  doc.setFont('helvetica','bold'); doc.setTextColor(100); doc.text('Date:', 14, y);
+  doc.setFont('helvetica','normal'); doc.setTextColor(20); doc.text(String(d.date || '—'), 30, y);
+  doc.setFont('helvetica','bold'); doc.setTextColor(100); doc.text('Quote No:', 70, y);
+  doc.setFont('helvetica','normal'); doc.setTextColor(20); doc.text(String(d.ref || '—'), 92, y);
+  doc.setFont('helvetica','bold'); doc.setTextColor(100); doc.text('Client:', 140, y);
+  doc.setFont('helvetica','normal'); doc.setTextColor(20); doc.text(String(d.client || '—'), 158, y);
   y += 5;
-  doc.setFont('helvetica','bold'); doc.text(`Client:`, 14, y); doc.setFont('helvetica','normal'); doc.text(d.client || '—', 28, y);
-  doc.setFont('helvetica','bold'); doc.text(`Location:`, pageW - 90, y);
-  doc.setFont('helvetica','normal'); doc.text(d.loc || '—', pageW - 70, y);
-  y += 8;
+  // Row 2
+  doc.setFont('helvetica','bold'); doc.setTextColor(100); doc.text('Location:', 14, y);
+  doc.setFont('helvetica','normal'); doc.setTextColor(20); doc.text(String(d.loc || '—'), 30, y);
+  doc.setFont('helvetica','bold'); doc.setTextColor(100); doc.text('Tonnage:', 70, y);
+  doc.setFont('helvetica','normal'); doc.setTextColor(20); doc.text(fmtNum(d.tonnage || 0, 2) + ' MT', 92, y);
+  doc.setFont('helvetica','bold'); doc.setTextColor(100); doc.text('Area:', 140, y);
+  doc.setFont('helvetica','normal'); doc.setTextColor(20); doc.text(fmtNum(d.area || 0, 0) + ' sqm', 158, y);
+  y += 7;
 
-  // Table
+  // Table body
   const body = rows.map(r => [
     String(r.sNo),
     r.description,
@@ -1922,19 +1925,21 @@ function buildCustomerQuotePDF() {
     styles: { fontSize: 9, cellPadding: 2.5, font: 'helvetica', overflow: 'linebreak', valign: 'top' },
     headStyles: { fillColor: [0, 43, 95], textColor: 255, fontStyle: 'bold' },
     columnStyles: {
-      0: { cellWidth: 10, halign: 'center' },
-      1: { cellWidth: 88 },
+      0: { cellWidth: 12, halign: 'center' },  // S No — widened so it stays on one line
+      1: { cellWidth: 86 },
       2: { cellWidth: 14, halign: 'center' },
       3: { cellWidth: 18, halign: 'right' },
       4: { cellWidth: 26, halign: 'right' },
       5: { cellWidth: 'auto', halign: 'right' }
     },
     rowPageBreak: 'avoid',
-    margin: { left: 14, right: 14, bottom: 18 },
-    didDrawPage: function() {
-      doc.setFontSize(7); doc.setTextColor(120);
-      doc.text(`Annexure - D - Bill of Quantities`, 14, pageH - 8);
-      doc.text(`Metfraa Steel Buildings Pvt Ltd`, pageW - 14, pageH - 8, { align:'right' });
+    margin: { top: 50, left: 14, right: 14, bottom: 18 },
+    didDrawPage: function(data) {
+      // Repeat document header on continuation pages
+      if (data.pageNumber > 1) {
+        drawPdfHeader(doc, { docType: 'annexureD', client: d.client, project: d.name });
+      }
+      drawPdfFooter(doc, d.ref);
     }
   });
 
@@ -1978,6 +1983,116 @@ async function saveCustomerQuoteToCloud() {
   }
 }
 
+// =========================================================
+// STEP 6 — Combined save: pushes Costing PDF + JSON to OneDrive,
+// then navigates to the Customer Quote screen.
+// "Locked" semantics: save MUST succeed before customer quote opens.
+// =========================================================
+async function saveAndProceedToCustomerQuote() {
+  const btn = document.getElementById('saveAndProceedBtn');
+  const stat = document.getElementById('saveAndProceedStatus');
+  const d = projectState.details || {};
+  if (!d.name || d.name === '—' || !d.client || d.client === '—' || !d.date) {
+    if (stat) stat.innerHTML = '<span style="color:#dc3545;">❌ Project Name, Client and Date are required (Step 1).</span>';
+    return;
+  }
+  btn.disabled = true;
+  const origText = btn.innerText;
+  btn.innerText = '☁ Saving to OneDrive…';
+  if (stat) stat.innerText = 'Generating PDF and uploading…';
+  try {
+    ensureStep3Overrides();
+    // Build step3Computed for analytics
+    const step3Computed = {};
+    getIncludedParams().forEach(p => {
+      if ((parseFloat(projectState.qtys[p])||0) <= 0) return;
+      const c = computeStep3ForParam(p);
+      const node = MASTER_DB[p];
+      step3Computed[p] = {
+        unit: (node && node.__unit) || 'MT',
+        unitPre: c.unitPre,
+        unitPostMargin: c.unitPostMargin,
+        unitRounded: c.unitRounded,
+        paramTotal: c.paramTotal,
+        roundingUnit: c.roundingUnit
+      };
+    });
+    const doc = buildPDF();
+    const pdfBase64 = doc.output('datauristring').split(',')[1];
+    const jsonData = {
+      version: 5,
+      savedAt: new Date().toISOString(),
+      details: projectState.details,
+      qtys: projectState.qtys,
+      selections: projectState.selections,
+      siteSpecific: projectState.siteSpecific || {},
+      included: projectState.included || {},
+      step3: projectState.step3 || {},
+      step3Computed,
+      customerQuote: projectState.customerQuote || { descriptions: {} }
+    };
+    const res = await fetch(`${RENDER_URL}/api/save-quotation`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        projectName: d.name,
+        clientName: d.client,
+        date: d.date,
+        pdfBase64,
+        jsonData
+      })
+    });
+    const data = await res.json();
+    if (!data.success) throw new Error(data.error || 'Save failed');
+    const revLabel = data.revision === 0 ? 'R0 (initial)' : `R${data.revision}`;
+    if (stat) stat.innerHTML = `<span style="color:#28a745;">✓ Saved as <strong>${data.pdf?.fileName || 'PDF'}</strong> (${revLabel}). Opening Customer Quote…</span>`;
+    toast(`☁ Saved ${revLabel}`, 'ok', 3000);
+    // Brief delay so user sees the success message before nav
+    setTimeout(() => openCustomerQuote(), 900);
+  } catch (e) {
+    if (stat) stat.innerHTML = `<span style="color:#dc3545;">❌ ${e.message}</span>`;
+    toast('❌ ' + e.message, 'err', 6000);
+    btn.disabled = false;
+    btn.innerText = origText;
+  }
+}
+
+// Customer Quote — combined: build PDF, download locally, AND upload to OneDrive
+async function saveAndDownloadCustomerQuote() {
+  const d = projectState.details || {};
+  if (!d.name || d.name === '—' || !d.client || d.client === '—') {
+    toast('Project Name and Client are required before saving', 'err'); return;
+  }
+  const btn = document.getElementById('saveCQBtn');
+  btn.disabled = true;
+  const origText = btn.innerText;
+  btn.innerText = '☁ Saving…';
+  try {
+    const doc = buildCustomerQuotePDF();
+    const pdfBase64 = doc.output('datauristring').split(',')[1];
+    // Download locally first
+    doc.save(`${buildFileBase(d)}_CustomerQuote.pdf`);
+    // Then upload to OneDrive
+    const res = await fetch(`${RENDER_URL}/api/save-customer-quote`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        projectName: d.name,
+        clientName: d.client,
+        date: d.date,
+        pdfBase64
+      })
+    });
+    const data = await res.json();
+    if (!data.success) throw new Error(data.error || 'Upload failed');
+    toast(`✓ Downloaded + uploaded as ${data.fileName}`, 'ok', 5000);
+  } catch (e) {
+    toast('❌ ' + e.message, 'err', 6000);
+  } finally {
+    btn.disabled = false; btn.innerText = origText;
+  }
+}
+
 function computeTotalTonnage() {
   let total = 0;
   Object.entries(projectState.qtys || {}).forEach(([param, qStr]) => {
@@ -2014,7 +2129,7 @@ function captureProjectDetails() {
   if (tonnageInput) tonnageInput.value = fmtNum(computedTonnage, 2);
 
   projectState.details = {
-    ref: v('projRef') || 'Met/est/2026/XX',
+    ref: v('projRef') || 'Met/est/MM/YYYY/XX',
     date: v('projDate'),
     name: v('projName') || 'Project',
     client: v('projClient') || '—',
@@ -3207,7 +3322,98 @@ function downloadExcel() {
 }
 
 // =========================================================
-// BUILD PDF (returns jsPDF doc)
+// SHARED PDF HEADER — dual logos, ANNEXURE-D or COSTING ESTIMATION title.
+// Renders white band, METFRAA logo on the left, Group logo on the right,
+// centered title + client/project, teal divider underneath.
+// Returns the Y coordinate where document body content should begin.
+// =========================================================
+function drawPdfHeader(doc, opts) {
+  const pageW = doc.internal.pageSize.getWidth();
+  const HEADER_H = 32; // mm
+  // White band
+  doc.setFillColor(255, 255, 255);
+  doc.rect(0, 0, pageW, HEADER_H, 'F');
+  // Teal divider
+  doc.setFillColor(0, 102, 179);
+  doc.rect(0, HEADER_H, pageW, 1.2, 'F');
+
+  // Logos (aspect-preserved). Reduced height so they don't overlap the title.
+  const LOGO_H = 14;     // mm — reduced from 22 to avoid title overlap
+  const LOGO_TOP = 8;
+  // Left: METFRAA brand logo
+  try {
+    const logo = document.getElementById('brandLogo');
+    if (logo && logo.complete && logo.naturalWidth > 0) {
+      const canvas = document.createElement('canvas');
+      canvas.width = logo.naturalWidth;
+      canvas.height = logo.naturalHeight;
+      canvas.getContext('2d').drawImage(logo, 0, 0);
+      const aspect = logo.naturalWidth / logo.naturalHeight;
+      doc.addImage(canvas.toDataURL('image/png'), 'PNG', 8, LOGO_TOP, LOGO_H * aspect, LOGO_H);
+    }
+  } catch (e) {}
+  // Right: BHARAT STEEL GROUP logo (optional — only if Group_Logo.png is in /public)
+  try {
+    const grp = document.getElementById('groupLogo');
+    if (grp && grp.complete && grp.naturalWidth > 0) {
+      const canvas = document.createElement('canvas');
+      canvas.width = grp.naturalWidth;
+      canvas.height = grp.naturalHeight;
+      canvas.getContext('2d').drawImage(grp, 0, 0);
+      const aspect = grp.naturalWidth / grp.naturalHeight;
+      const w = LOGO_H * aspect;
+      doc.addImage(canvas.toDataURL('image/png'), 'PNG', pageW - 8 - w, LOGO_TOP, w, LOGO_H);
+    }
+  } catch (e) {}
+
+  // Centered title + subtitle. Different per doc-type.
+  doc.setTextColor(0, 43, 95);
+  if (opts && opts.docType === 'annexureD') {
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(16);
+    doc.text('ANNEXURE - D', pageW / 2, 12, { align: 'center' });
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(10);
+    doc.text('Bill of Quantities', pageW / 2, 18, { align: 'center' });
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(11);
+    doc.text(opts.client || '—', pageW / 2, 24, { align: 'center' });
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    doc.setTextColor(80, 80, 80);
+    doc.text(opts.project || '—', pageW / 2, 29, { align: 'center' });
+  } else {
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(16);
+    doc.text('COSTING ESTIMATION', pageW / 2, 14, { align: 'center' });
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(11);
+    doc.text(opts.client || '—', pageW / 2, 21, { align: 'center' });
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    doc.setTextColor(80, 80, 80);
+    doc.text(opts.project || '—', pageW / 2, 27, { align: 'center' });
+  }
+  doc.setTextColor(0, 0, 0);
+  return HEADER_H + 4; // y where body content should start
+}
+
+// Shared footer: page number + reference. Called from autoTable's didDrawPage.
+function drawPdfFooter(doc, ref) {
+  const pageW = doc.internal.pageSize.getWidth();
+  const pageH = doc.internal.pageSize.getHeight();
+  doc.setFontSize(7);
+  doc.setTextColor(120);
+  doc.text(`METFRAA  |  ${ref || ''}`, 14, pageH - 8);
+  // Page X of Y
+  const pageStr = `Page ${doc.internal.getNumberOfPages()}`;
+  doc.text(pageStr, pageW - 14, pageH - 8, { align: 'right' });
+}
+
+// =========================================================
+// BUILD PDF (Detailed Costing Estimation — internal use)
+// Full subcategory breakdown per parameter + summary page.
+// Headers (document + table) repeat on every page; page numbers shown.
 // =========================================================
 function buildPDF() {
   captureProjectDetails();
@@ -3219,127 +3425,195 @@ function buildPDF() {
   const pageW = doc.internal.pageSize.getWidth();
   const pageH = doc.internal.pageSize.getHeight();
 
-  // ----- HEADER (white band, dark text, teal divider) -----
-  doc.setFillColor(255, 255, 255);
-  doc.rect(0, 0, pageW, 32, 'F');
-  doc.setFillColor(0, 102, 179);
-  doc.rect(0, 32, pageW, 1.5, 'F');
+  // Draw header on page 1
+  let y = drawPdfHeader(doc, { client: d.client, project: d.name });
 
-  // Logo on the left (aspect-preserved within 22mm height)
-  const LOGO_H = 22;
-  const LOGO_TOP = 5;
-  try {
-    const logo = document.getElementById('brandLogo');
-    if (logo && logo.complete && logo.naturalWidth > 0) {
-      const canvas = document.createElement('canvas');
-      canvas.width = logo.naturalWidth;
-      canvas.height = logo.naturalHeight;
-      canvas.getContext('2d').drawImage(logo, 0, 0);
-      const aspect = logo.naturalWidth / logo.naturalHeight;
-      const logoRenderedW = LOGO_H * aspect;
-      doc.addImage(canvas.toDataURL('image/png'), 'PNG', 8, LOGO_TOP, logoRenderedW, LOGO_H);
-    }
-  } catch (e) {}
-
-  doc.setTextColor(0, 43, 95);
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(18);
-  doc.text('COSTING ESTIMATION', pageW / 2, 14, { align: 'center' });
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(13);
-  doc.text(d.client || '—', pageW / 2, 22, { align: 'center' });
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(9);
-  doc.setTextColor(80, 80, 80);
-  doc.text(d.name || '—', pageW / 2, 28, { align: 'center' });
-  doc.setTextColor(0, 0, 0);
-
-  // ----- PROJECT INFO STRIP -----
-  let y = 42;
-  doc.setTextColor(0, 43, 95);
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(11);
-  doc.text(d.name || '—', 14, y); y += 5;
-  doc.setFont('helvetica', 'normal');
+  // Project info strip (6 fields: Date, Quote No, Client, Location, Tonnage, Area)
   doc.setFontSize(8);
-  doc.setTextColor(90, 90, 90);
-  doc.text(`Ref: ${d.ref || '—'}    |    Date: ${d.date || '—'}    |    Location: ${d.loc || '—'}`, 14, y);
-  y += 6;
+  doc.setTextColor(0,0,0);
+  doc.setFont('helvetica','bold'); doc.setTextColor(100);
+  // Row 1
+  doc.text('Date:', 14, y); doc.setFont('helvetica','normal'); doc.setTextColor(20); doc.text(String(d.date || '—'), 30, y);
+  doc.setFont('helvetica','bold'); doc.setTextColor(100); doc.text('Quote No:', 70, y);
+  doc.setFont('helvetica','normal'); doc.setTextColor(20); doc.text(String(d.ref || '—'), 92, y);
+  doc.setFont('helvetica','bold'); doc.setTextColor(100); doc.text('Client:', 140, y);
+  doc.setFont('helvetica','normal'); doc.setTextColor(20); doc.text(String(d.client || '—'), 158, y);
+  y += 5;
+  // Row 2
+  doc.setFont('helvetica','bold'); doc.setTextColor(100); doc.text('Location:', 14, y);
+  doc.setFont('helvetica','normal'); doc.setTextColor(20); doc.text(String(d.loc || '—'), 30, y);
+  doc.setFont('helvetica','bold'); doc.setTextColor(100); doc.text('Tonnage:', 70, y);
+  doc.setFont('helvetica','normal'); doc.setTextColor(20); doc.text(fmtNum(d.tonnage || 0, 2) + ' MT', 92, y);
+  doc.setFont('helvetica','bold'); doc.setTextColor(100); doc.text('Area:', 140, y);
+  doc.setFont('helvetica','normal'); doc.setTextColor(20); doc.text(fmtNum(d.area || 0, 0) + ' sqm', 158, y);
+  y += 7;
 
-  const info = [
-    ['Distance', (d.dist || 0) + ' km', 'Building Height', (d.height || 0) + ' m'],
-    ['Total Area', fmtNum(d.area || 0, 0) + ' sqm', 'Steel Tonnage', fmtNum(d.tonnage || 0, 2) + ' MT'],
-    ['Safety Standard', d.safety || '—', 'Design Included', d.design || '—']
-  ];
-  doc.setFontSize(8);
-  info.forEach(rowArr => {
-    doc.setFont('helvetica','bold'); doc.setTextColor(100); doc.text(rowArr[0]+':', 14, y);
-    doc.setFont('helvetica','normal'); doc.setTextColor(20); doc.text(String(rowArr[1]), 42, y);
-    doc.setFont('helvetica','bold'); doc.setTextColor(100); doc.text(rowArr[2]+':', 110, y);
-    doc.setFont('helvetica','normal'); doc.setTextColor(20); doc.text(String(rowArr[3]), 148, y);
-    y += 5;
-  });
-  y += 4;
-
-  // ----- ONE-LINE-PER-PARAMETER TABLE (no internal breakdown) -----
+  // Walk parameters and emit a detailed table per parameter
   const included = getIncludedParams().filter(p => (parseFloat(projectState.qtys[p])||0) > 0);
-  const body = [];
-  let grandBase = 0;
-  included.forEach((p, i) => {
-    const node = MASTER_DB[p];
-    const unit = (node && node.__unit) || 'MT';
-    const c = computeStep3ForParam(p);
-    grandBase += c.paramTotal;
+  const paramSummary = []; // for the final summary page
+  let sl = 1;
+  let startY = y;
+
+  included.forEach(pName => {
+    const qty = parseFloat(projectState.qtys[pName]) || 0;
+    const unit = (MASTER_DB[pName] && MASTER_DB[pName].__unit) || 'MT';
+    const cleanName = cleanParamLabel(pName);
+    const subs = projectState.selections[pName] || {};
+    const entries = Object.entries(subs);
+    if (entries.length === 0) return;
+
+    // Per-param subcategory rows + subtotal (PRE margin)
+    let preMarginTotal = 0;
+    const body = [];
+    body.push([{
+      content: `${sl}. ${cleanName}  (Qty: ${fmtNum(qty,2)} ${unit})`,
+      colSpan: 6,
+      styles: { fillColor:[233,236,239], textColor:[0,43,95], fontStyle:'bold', halign:'left', fontSize: 10 }
+    }]);
+
+    // Order by subcat rank
+    entries.sort((a,b) => subcatRank((subs[a[0]].subcategory||a[0])) - subcatRank((subs[b[0]].subcategory||b[0])));
+
+    entries.forEach(([subName, data]) => {
+      if (data.isRM && Array.isArray(data.rms)) {
+        data.rms.forEach(rm => {
+          const lineAmt = rm.line || 0;
+          preMarginTotal += lineAmt;
+          body.push([
+            '',
+            `RM COST${rm.group ? ' — ' + rm.group : ''}  (${rm.name || ''})`,
+            fmtINR(rm.rate).replace('₹ ',''),
+            fmtNum(rm.qty, 2),
+            unit,
+            fmtINR(lineAmt).replace('₹ ','')
+          ]);
+        });
+        return;
+      }
+      const label = data.subcategory || subName;
+      const tagSuffix = data.isAuto ? ' [AUTO]' : data.isSiteSpecific ? ' [SITE]' : '';
+      const remarkTxt = data.remark ? `  — ${data.remark}` : '';
+      const description = `${label}${tagSuffix}  (${data.name || ''})${remarkTxt}`;
+      const rate = data.type === 'PERCENT'
+        ? `${(data.rate || 0).toFixed(2)}%`
+        : fmtINR(data.perUnit || 0).replace('₹ ', '');
+      const lineAmt = data.line != null ? data.line : (data.perUnit || 0) * qty;
+      preMarginTotal += lineAmt;
+      body.push(['', description, rate, fmtNum(qty, 2), unit, fmtINR(lineAmt).replace('₹ ', '')]);
+    });
+
+    // Show margin + rounded final on the per-param table
+    const ov = (projectState.step3 || {})[pName] || { margin: d.margin || 0, roundEnabled: true };
+    const c = computeStep3ForParam(pName);
     body.push([
-      String(i + 1),
-      cleanParamLabel(p),
-      fmtNum(c.qty, 2),
-      unit,
-      fmtINR(c.unitRounded).replace('₹ ', ''),
-      fmtINR(c.paramTotal).replace('₹ ', '')
+      { content: `Pre-margin subtotal`, colSpan: 4, styles: { fontStyle:'bold', halign:'right', fillColor:[241,243,245] }},
+      { content: unit, styles: { fontStyle:'bold', halign:'center', fillColor:[241,243,245] }},
+      { content: fmtINR(preMarginTotal).replace('₹ ',''), styles: { fontStyle:'bold', halign:'right', fillColor:[241,243,245] }}
     ]);
+    body.push([
+      { content: `Margin @ ${ov.margin}%   |   Rounded to nearest ₹${c.roundingUnit}${ov.roundEnabled?'':' (OFF)'}`, colSpan: 4, styles: { halign:'right', fontStyle:'italic', textColor:[100,100,100] }},
+      { content: unit, styles: { halign:'center', textColor:[100,100,100] }},
+      { content: fmtINR(c.unitRounded).replace('₹ ','') + ' /' + unit, styles: { halign:'right', textColor:[100,100,100] }}
+    ]);
+    body.push([
+      { content: `Param Total (Qty × Rounded Unit)`, colSpan: 4, styles: { fontStyle:'bold', halign:'right', fillColor:[0,43,95], textColor:[255,255,255] }},
+      { content: unit, styles: { fontStyle:'bold', halign:'center', fillColor:[0,43,95], textColor:[255,255,255] }},
+      { content: fmtINR(c.paramTotal).replace('₹ ',''), styles: { fontStyle:'bold', halign:'right', fillColor:[0,43,95], textColor:[255,255,255] }}
+    ]);
+
+    paramSummary.push({ sl, name: cleanName, total: c.paramTotal });
+
+    doc.autoTable({
+      startY,
+      head: [['SL', 'DESCRIPTION', 'UNIT RATE', 'QTY', 'UNIT', 'TOTAL (₹)']],
+      body,
+      theme: 'grid',
+      styles: { fontSize: 9, cellPadding: 2.5, font: 'helvetica', overflow: 'linebreak', valign: 'middle' },
+      headStyles: { fillColor: [0, 43, 95], textColor: 255, fontStyle: 'bold', fontSize: 9 },
+      columnStyles: {
+        0: { cellWidth: 12, halign: 'center' },          // SL — widened so "SL" never wraps
+        1: { cellWidth: 78 },
+        2: { cellWidth: 26, halign: 'right' },
+        3: { cellWidth: 18, halign: 'right' },
+        4: { cellWidth: 16, halign: 'center' },
+        5: { cellWidth: 'auto', halign: 'right' }
+      },
+      rowPageBreak: 'avoid',
+      margin: { top: 50, left: 14, right: 14, bottom: 18 }, // top:50 ensures header+strip fit on continuation pages
+      didDrawPage: function(data) {
+        // On EVERY page (including continuations), redraw the document header and footer
+        if (data.pageNumber > 1) {
+          drawPdfHeader(doc, { client: d.client, project: d.name });
+          // We don't redraw the project-info strip on continuation pages — table head suffices
+        }
+        drawPdfFooter(doc, d.ref);
+      }
+    });
+
+    // Move to next page for the next parameter (so each one starts fresh)
+    doc.addPage();
+    startY = drawPdfHeader(doc, { client: d.client, project: d.name }) + 2;
+    drawPdfFooter(doc, d.ref);
+    sl++;
   });
 
+  // Remove the trailing empty page if we added one after the last param
+  const totalPages = doc.internal.getNumberOfPages();
+  if (totalPages > 1 && included.length > 0) {
+    doc.deletePage(totalPages);
+  }
+
+  // ===== Final Summary page =====
+  doc.addPage();
+  let ySum = drawPdfHeader(doc, { client: d.client, project: d.name }) + 2;
+  drawPdfFooter(doc, d.ref);
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(0, 43, 95);
+  doc.setFontSize(13);
+  doc.text('COSTING SUMMARY', pageW / 2, ySum, { align: 'center' });
+  ySum += 8;
+
+  const summaryBody = paramSummary.map(p => [
+    String(p.sl), p.name, fmtINR(p.total).replace('₹ ', '')
+  ]);
+  const grandBase = paramSummary.reduce((s, p) => s + p.total, 0);
   const gstPct = parseFloat(d.gst) || 0;
   const gst = grandBase * (gstPct / 100);
   const finalTotal = grandBase + gst;
 
-  body.push([
-    { content: 'SUBTOTAL', colSpan: 5, styles: { halign:'right', fontStyle:'bold', fillColor:[241,243,245] }},
+  summaryBody.push([
+    { content: 'SUBTOTAL (Sum of all parameter totals)', colSpan: 2, styles: { halign:'right', fontStyle:'bold', fillColor:[241,243,245] }},
     { content: fmtINR(grandBase).replace('₹ ',''), styles: { halign:'right', fontStyle:'bold', fillColor:[241,243,245] }}
   ]);
-  body.push([
-    { content: `GST @ ${gstPct}%`, colSpan: 5, styles: { halign:'right' }},
+  summaryBody.push([
+    { content: `GST @ ${gstPct}%`, colSpan: 2, styles: { halign:'right' }},
     { content: fmtINR(gst).replace('₹ ',''), styles: { halign:'right' }}
   ]);
-  body.push([
-    { content: 'GRAND TOTAL', colSpan: 5, styles: { halign:'right', fontStyle:'bold', fillColor:[0,43,95], textColor:[255,255,255], fontSize: 11 }},
+  summaryBody.push([
+    { content: 'GRAND TOTAL', colSpan: 2, styles: { halign:'right', fontStyle:'bold', fillColor:[0,43,95], textColor:[255,255,255], fontSize: 11 }},
     { content: fmtINR(finalTotal).replace('₹ ',''), styles: { halign:'right', fontStyle:'bold', fillColor:[0,43,95], textColor:[255,255,255], fontSize: 11 }}
   ]);
 
   doc.autoTable({
-    startY: y,
-    head: [['SL','PARAMETER','QTY','UNIT','UNIT COST (₹)','TOTAL (₹)']],
-    body,
+    startY: ySum,
+    head: [['SL', 'PARAMETER', 'TOTAL (₹)']],
+    body: summaryBody,
     theme: 'grid',
     styles: { fontSize: 10, cellPadding: 3, font: 'helvetica' },
     headStyles: { fillColor: [0, 43, 95], textColor: 255, fontStyle: 'bold' },
     columnStyles: {
-      0: { cellWidth: 10, halign:'center' },
-      1: { cellWidth: 84 },
-      2: { cellWidth: 22, halign: 'right' },
-      3: { cellWidth: 14, halign: 'center' },
-      4: { cellWidth: 28, halign: 'right' },
-      5: { cellWidth: 'auto', halign: 'right' }
+      0: { cellWidth: 14, halign: 'center' },
+      1: { cellWidth: 110 },
+      2: { cellWidth: 'auto', halign: 'right' }
     },
-    margin: { left: 14, right: 14, bottom: 18 },
-    didDrawPage: function() {
-      doc.setFontSize(7); doc.setTextColor(120);
-      doc.text(`Page ${doc.internal.getNumberOfPages()}`, pageW - 20, pageH - 8);
-      doc.text(`METFRAA  |  ${d.ref || ''}`, 14, pageH - 8);
+    margin: { top: 50, left: 14, right: 14, bottom: 18 },
+    didDrawPage: function(data) {
+      if (data.pageNumber > 1) drawPdfHeader(doc, { client: d.client, project: d.name });
+      drawPdfFooter(doc, d.ref);
     }
   });
 
+  // Synopsis
   if (d.area > 0) {
     let yEnd = doc.lastAutoTable.finalY + 8;
     doc.setFontSize(10); doc.setFont('helvetica','bold'); doc.setTextColor(0,43,95);
