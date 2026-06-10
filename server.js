@@ -1683,22 +1683,39 @@ app.get('/api/approval-selftest', async (req, res) => {
 
     // 4. Can we send a test email? (Only fires if ?sendEmail=1 to avoid spamming arasu.)
     if (req.query.sendEmail === '1') {
+        // Call Graph sendMail INLINE here so we can surface the full error in the response
+        // (the sendEmail() helper logs to console but swallows error details).
         try {
-            const html = buildEmailHtml({
-                title: 'Approval workflow — selftest',
-                intro: 'This is a diagnostic email from /api/approval-selftest. If you received it, Graph sendMail is working.',
-                infoRows: [['Sent at', new Date().toISOString()]],
-                ctaUrl: APP_BASE_URL,
-                ctaLabel: 'Open App'
-            });
-            const ok = await sendEmail({
-                to: APPROVER_EMAIL,
-                subject: '[selftest] Approval workflow diagnostic',
-                htmlBody: html
-            });
-            results.sendEmail = { ok, note: ok ? `email sent to ${APPROVER_EMAIL}` : 'sendEmail returned false — check server logs for details' };
-        } catch (e) {
-            results.sendEmail = { ok: false, error: captureErr(e) };
+            const targetEmail = process.env.TARGET_USER_EMAIL;
+            if (!targetEmail) {
+                results.sendEmail = { ok: false, error: 'TARGET_USER_EMAIL not set' };
+            } else {
+                const message = {
+                    message: {
+                        subject: '[selftest] Approval workflow diagnostic',
+                        body: { contentType: 'HTML', content: '<p>This is a diagnostic email from the approval selftest endpoint. If you received it, Graph sendMail is working.</p>' },
+                        toRecipients: [{ emailAddress: { address: APPROVER_EMAIL } }]
+                    },
+                    saveToSentItems: true
+                };
+                try {
+                    await graphClient
+                        .api(`/users/${targetEmail}/sendMail`)
+                        .post(message);
+                    results.sendEmail = { ok: true, note: `email sent to ${APPROVER_EMAIL}` };
+                } catch (e) {
+                    results.sendEmail = {
+                        ok: false,
+                        sender: targetEmail,
+                        recipient: APPROVER_EMAIL,
+                        error: captureErr(e),
+                        // Stringify the whole error to catch anything not on the standard fields
+                        rawErrorString: String(e)
+                    };
+                }
+            }
+        } catch (outer) {
+            results.sendEmail = { ok: false, outerError: captureErr(outer) };
         }
     } else {
         results.sendEmail = { skipped: true, note: 'add ?sendEmail=1 to actually send a test email to arasu@metfraa.com' };
