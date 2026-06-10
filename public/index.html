@@ -136,6 +136,7 @@ body { font-family: 'Segoe UI', Tahoma, sans-serif; background: var(--brand-grey
   <div class="app-header-actions">
     <button class="app-header-btn" id="refreshBtn" onclick="refreshDB()" title="Reload master data from OneDrive">⟳ Refresh</button>
     <button class="app-header-btn" id="projectsBtn" onclick="navProjects()" title="View saved projects and their revisions">📁 Projects</button>
+    <button class="app-header-btn" id="approvalsBtn" onclick="navApprovals()" title="Review pending costing estimations (Arasu only)">✅ Approvals</button>
     <button class="app-header-btn" id="settingsBtn" onclick="navSettings()">⚙ Settings</button>
     <img class="brand-logo" id="brandLogo" src="Metfraa.png" alt="METFRAA" onerror="this.style.display='none'">
     <img id="groupLogo" src="Group_Logo.png" alt="" style="display:none;" onerror="this.style.display='none'">
@@ -634,7 +635,93 @@ body { font-family: 'Segoe UI', Tahoma, sans-serif; background: var(--brand-grey
     <div class="btn-row"><button class="btn btn-secondary" onclick="goToPage(1)">◀ Back to Step 1</button></div>
   </div>
 
-  <!-- PROJECT DETAIL PAGE (revisions list for a specific project) -->
+  <!-- APPROVALS PAGE (Arasu only — password gated) -->
+  <div id="pageApprovals" class="page">
+    <div class="card">
+      <div class="section-title">
+        <span>✅ Approvals · Pending Reviews</span>
+        <div>
+          <span id="apvSessionInfo" style="font-size:11px; color:#666; margin-right:10px;"></span>
+          <button class="btn btn-secondary" onclick="loadApprovalsList()" style="font-size:11px; padding:5px 12px;">⟳ Refresh</button>
+          <button class="btn btn-secondary" onclick="apvLogout()" style="font-size:11px; padding:5px 12px; margin-left:6px;">Sign out</button>
+        </div>
+      </div>
+      <p style="font-size:12px; color:#666; margin-bottom:10px;">
+        Each card below is a costing estimation awaiting your review. Open the embedded PDF, then approve or request changes. Approving will notify the costing team to proceed with the customer quote.
+      </p>
+      <div id="approvalsListContainer">
+        <em style="color:#888;">Loading…</em>
+      </div>
+    </div>
+    <div class="btn-row"><button class="btn btn-secondary" onclick="goToPage(1)">◀ Back to Step 1</button></div>
+  </div>
+
+  <!-- APPROVALS PASSWORD MODAL -->
+  <div id="apvPwdModal" class="modal-bg">
+    <div class="modal" style="max-width:420px; padding:0;">
+      <div style="padding:16px 24px; border-bottom:1px solid #eee;">
+        <h3 style="margin:0; color:var(--brand-primary);">✅ Approvals — Sign in</h3>
+      </div>
+      <div style="padding:20px 24px;">
+        <p style="font-size:13px; color:#555; margin:0 0 14px;">Enter the approver password to review pending costing estimations.</p>
+        <input type="password" id="apvPwdInput" class="form-input" placeholder="Password" style="margin-bottom:8px;" onkeydown="if(event.key==='Enter') apvDoLogin()">
+        <div id="apvPwdMsg" style="font-size:12px; min-height:18px; color:#dc3545;"></div>
+      </div>
+      <div style="padding:14px 24px; border-top:1px solid #eee; text-align:right;">
+        <button class="btn btn-secondary" onclick="apvCancelLogin()" style="margin-right:8px;">Cancel</button>
+        <button class="btn btn-primary" onclick="apvDoLogin()" id="apvPwdBtn">Sign in</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- REQUEST CHANGES MODAL -->
+  <div id="apvChangesModal" class="modal-bg">
+    <div class="modal" style="max-width:1000px; width:95vw; height:90vh; padding:0; display:flex; flex-direction:column;">
+      <div style="padding:14px 22px; border-bottom:1px solid #eee; flex-shrink:0; display:flex; align-items:baseline;">
+        <h3 style="margin:0; color:var(--brand-primary);">✎ Request Changes</h3>
+        <span id="apvChangesSubtitle" style="font-size:13px; color:#666; margin-left:12px;"></span>
+      </div>
+      <div style="display:grid; grid-template-columns: 1.1fr 1fr; gap:0; flex:1; overflow:hidden;">
+        <!-- LEFT: param list, click to add remark -->
+        <div style="border-right:1px solid #e9ecef; overflow-y:auto; padding:14px;">
+          <div style="font-size:11px; font-weight:700; text-transform:uppercase; color:#666; margin-bottom:8px;">Parameters · click to add remark</div>
+          <div id="apvParamList"></div>
+        </div>
+        <!-- RIGHT: filled remarks summary + global note + actions -->
+        <div style="display:flex; flex-direction:column; overflow:hidden;">
+          <div style="flex:1; overflow-y:auto; padding:14px;">
+            <div style="font-size:11px; font-weight:700; text-transform:uppercase; color:#666; margin-bottom:8px;">Remarks Summary <span id="apvRemarkCount" style="color:var(--brand-primary);"></span></div>
+            <div id="apvRemarksSummary" style="margin-bottom:14px; min-height:60px;">
+              <em style="color:#aaa; font-size:12px;">No remarks yet. Click a parameter on the left to add one.</em>
+            </div>
+            <div style="font-size:11px; font-weight:700; text-transform:uppercase; color:#666; margin:14px 0 6px;">Overall note (optional)</div>
+            <textarea id="apvGlobalNote" placeholder="Anything that applies to the whole estimation…" style="width:100%; min-height:60px; padding:8px; font-size:13px; border:1px solid #ddd; border-radius:4px; resize:vertical;"></textarea>
+          </div>
+          <div style="padding:12px 14px; border-top:1px solid #eee; flex-shrink:0; text-align:right;">
+            <button class="btn btn-secondary" onclick="apvCloseChangesModal()" style="margin-right:8px;">Cancel</button>
+            <button class="btn btn-primary" id="apvSubmitChangesBtn" onclick="apvSubmitChanges()">Submit Changes</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- INLINE REMARK EDITOR MODAL (small popup over the changes modal) -->
+  <div id="apvRemarkEditor" class="modal-bg" style="z-index:9100;">
+    <div class="modal" style="max-width:520px; padding:0;">
+      <div style="padding:14px 20px; border-bottom:1px solid #eee;">
+        <h3 style="margin:0; color:var(--brand-primary); font-size:16px;" id="apvRemarkEditorTitle">Edit remark</h3>
+      </div>
+      <div style="padding:18px 20px;">
+        <textarea id="apvRemarkText" placeholder="e.g. BUILT UP — reduce RM rate" style="width:100%; min-height:90px; padding:10px; font-size:13px; border:1px solid #ddd; border-radius:4px; resize:vertical;"></textarea>
+      </div>
+      <div style="padding:12px 20px; border-top:1px solid #eee; text-align:right;">
+        <button class="btn btn-secondary" onclick="apvCloseRemarkEditor()" style="margin-right:8px;">Cancel</button>
+        <button class="btn btn-secondary" id="apvDeleteRemarkBtn" onclick="apvDeleteRemark()" style="margin-right:8px; display:none;">Remove</button>
+        <button class="btn btn-primary" onclick="apvSaveRemark()">Save</button>
+      </div>
+    </div>
+  </div>
   <div id="pageProjectDetail" class="page">
     <div class="card">
       <div class="section-title">
@@ -1870,6 +1957,374 @@ async function applyDefaultsToHiddenInputs() {
     if (gEl) gEl.value = data.gst;
   } catch (_) {}
 }
+
+// =========================================================
+// APPROVALS WORKFLOW — Phase 2
+// Arasu's password-gated approval review page.
+// =========================================================
+const APV = {
+  token: null,
+  pending: [],
+  // Request-Changes modal state:
+  currentItem: null,   // the pending revision currently being reviewed
+  remarks: {},         // { canonicalParamName: text }
+  paramOrder: [],      // canonical param names in display order
+  paramRaw: {},        // canonicalParamName → original raw name (for API)
+  editingParam: null   // which param is in the inline editor right now
+};
+
+// Normalise a param name: trim, drop leading "1. ", uppercase for matching only.
+// Returns { canonical (Title Case nice), key (matching key) }
+function _apvCanonParam(rawName) {
+  const stripped = String(rawName || '').trim().replace(/^\d+\.\s*/, '').trim();
+  const key = stripped.toLowerCase();
+  // Title-ish display: keep original casing of the cleanest variant
+  return { display: stripped, key };
+}
+
+function navApprovals() {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.step-indicator').forEach(s => s.classList.remove('active'));
+  document.getElementById('wizardSteps').style.display = 'none';
+  window.scrollTo(0, 0);
+
+  // Check existing session token
+  const stash = sessionStorage.getItem('apvToken');
+  if (stash) {
+    APV.token = stash;
+    document.getElementById('pageApprovals').classList.add('active');
+    document.getElementById('apvSessionInfo').textContent = '✓ Signed in';
+    loadApprovalsList();
+  } else {
+    // Show login modal first; keep the approvals page hidden until auth succeeds
+    document.getElementById('apvPwdModal').classList.add('show');
+    document.getElementById('apvPwdInput').value = '';
+    document.getElementById('apvPwdMsg').textContent = '';
+    setTimeout(() => document.getElementById('apvPwdInput').focus(), 50);
+  }
+}
+
+async function apvDoLogin() {
+  const btn = document.getElementById('apvPwdBtn');
+  const msg = document.getElementById('apvPwdMsg');
+  const pwd = document.getElementById('apvPwdInput').value;
+  if (!pwd) { msg.textContent = 'Enter password'; return; }
+  btn.disabled = true; btn.textContent = 'Signing in…';
+  try {
+    const r = await fetch(`${RENDER_URL}/api/arasu-auth`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: pwd })
+    });
+    const d = await r.json();
+    if (!r.ok || !d.success) throw new Error(d.error || 'Sign-in failed');
+    APV.token = d.token;
+    sessionStorage.setItem('apvToken', d.token);
+    document.getElementById('apvPwdModal').classList.remove('show');
+    document.getElementById('pageApprovals').classList.add('active');
+    document.getElementById('apvSessionInfo').textContent = '✓ Signed in';
+    loadApprovalsList();
+  } catch (e) {
+    msg.textContent = e.message || 'Invalid password';
+  } finally {
+    btn.disabled = false; btn.textContent = 'Sign in';
+  }
+}
+
+function apvCancelLogin() {
+  document.getElementById('apvPwdModal').classList.remove('show');
+  // Go back to step 1
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.getElementById('page1').classList.add('active');
+  document.getElementById('wizardSteps').style.display = '';
+}
+
+function apvLogout() {
+  APV.token = null;
+  sessionStorage.removeItem('apvToken');
+  document.getElementById('pageApprovals').classList.remove('active');
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.getElementById('page1').classList.add('active');
+  document.getElementById('wizardSteps').style.display = '';
+  toast('Signed out', 'ok', 2000);
+}
+
+async function loadApprovalsList() {
+  const c = document.getElementById('approvalsListContainer');
+  c.innerHTML = '<em style="color:#888;">Loading pending approvals…</em>';
+  try {
+    const r = await fetch(`${RENDER_URL}/api/list-pending-approvals`);
+    const d = await r.json();
+    if (!d.success) throw new Error(d.error || 'Failed to load');
+    APV.pending = d.items || [];
+    if (APV.pending.length === 0) {
+      c.innerHTML = `<div style="padding:30px; text-align:center; background:#f8f9fa; border-radius:6px;">
+        <div style="font-size:32px; opacity:0.4;">✨</div>
+        <div style="font-size:14px; color:#666; margin-top:6px;">All caught up — no pending approvals.</div>
+      </div>`;
+      return;
+    }
+    c.innerHTML = APV.pending.map((it, idx) => _apvRenderCard(it, idx)).join('');
+  } catch (e) {
+    c.innerHTML = `<div style="color:#dc3545; padding:12px; background:#fff5f5; border:1px solid #ffd5d5; border-radius:4px;">Error: ${e.message}</div>`;
+  }
+}
+
+function _apvRenderCard(it, idx) {
+  const submitted = it.submittedAt ? _apvRelativeTime(it.submittedAt) : '';
+  const pdfUrl = it.pdfUrl || '';
+  const escId = `apvCard_${idx}`;
+  // Embedded PDF — use OneDrive's embed mode by appending ?web=1 to the web URL.
+  // If the URL contains "sharepoint.com", we use the embed view via &amp;action=embedview
+  const embedUrl = _apvBuildEmbedUrl(pdfUrl);
+  return `
+    <div id="${escId}" style="background:#fff; border:1px solid #e9ecef; border-radius:8px; padding:0; margin-bottom:16px; overflow:hidden;">
+      <div style="padding:14px 18px; background:#f8fafc; border-bottom:1px solid #e9ecef;">
+        <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:14px;">
+          <div style="min-width:0; flex:1;">
+            <div style="font-size:16px; font-weight:700; color:var(--brand-primary);">${_esc(it.clientName || '—')} · ${_esc(it.projectName || '—')}</div>
+            <div style="font-size:12px; color:#666; margin-top:3px; font-family:monospace;">
+              ${_esc(it.ref || '—')} · ${_esc(it.revision)} · submitted ${submitted}
+            </div>
+            <div style="font-size:12px; color:#666; margin-top:3px;">
+              ${_esc(it.location || '—')} · ${it.tonnage ? it.tonnage + ' MT' : '— MT'} · ${it.area ? Number(it.area).toLocaleString('en-IN') + ' sqm' : '— sqm'}
+            </div>
+          </div>
+          <div style="display:flex; flex-direction:column; gap:6px; flex-shrink:0;">
+            <button class="btn btn-primary" style="padding:6px 14px; font-size:13px;" onclick="apvApprove(${idx})">✓ Approve</button>
+            <button class="btn btn-secondary" style="padding:6px 14px; font-size:13px;" onclick="apvOpenChangesModal(${idx})">✎ Request Changes</button>
+            ${pdfUrl ? `<a class="btn btn-secondary" style="padding:6px 14px; font-size:11px; text-decoration:none; text-align:center;" href="${pdfUrl}" target="_blank">↗ Open in new tab</a>` : ''}
+          </div>
+        </div>
+      </div>
+      ${embedUrl ? `<iframe src="${embedUrl}" style="width:100%; height:680px; border:0; display:block;" sandbox="allow-scripts allow-same-origin allow-forms allow-popups"></iframe>` : '<div style="padding:20px; color:#999; font-style:italic;">No PDF preview available — open the OneDrive link.</div>'}
+    </div>
+  `;
+}
+
+// Convert a OneDrive PDF webUrl to its embed-viewer variant
+function _apvBuildEmbedUrl(webUrl) {
+  if (!webUrl) return '';
+  try {
+    // SharePoint / OneDrive personal share links: append &action=embedview (or ?web=1)
+    if (webUrl.includes('sharepoint.com') || webUrl.includes('1drv.ms')) {
+      const sep = webUrl.includes('?') ? '&' : '?';
+      return webUrl + sep + 'action=embedview&wdAr=1.7777777777777777';
+    }
+    return webUrl;
+  } catch (_) { return webUrl; }
+}
+
+function _esc(s) {
+  return String(s || '').replace(/[<>&"]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]));
+}
+
+function _apvRelativeTime(iso) {
+  try {
+    const then = new Date(iso).getTime();
+    const diff = Date.now() - then;
+    if (diff < 60_000) return 'just now';
+    if (diff < 3600_000) return `${Math.floor(diff/60_000)} min ago`;
+    if (diff < 86400_000) return `${Math.floor(diff/3600_000)} hr ago`;
+    const days = Math.floor(diff/86400_000);
+    if (days < 7) return `${days} day${days > 1 ? 's' : ''} ago`;
+    return new Date(iso).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+  } catch (_) { return iso; }
+}
+
+async function apvApprove(idx) {
+  const it = APV.pending[idx];
+  if (!it) return;
+  if (!confirm(`Approve "${it.clientName} · ${it.projectName} · ${it.revision}"?\n\nThe costing team will be notified to proceed with the customer quote.`)) return;
+  try {
+    const r = await fetch(`${RENDER_URL}/api/approve-revision`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project: it.project, revision: it.revision, token: APV.token })
+    });
+    const d = await r.json();
+    if (!r.ok || !d.success) throw new Error(d.error || 'Approve failed');
+    toast('✓ Approved — costing team notified', 'ok', 4000);
+    loadApprovalsList();
+  } catch (e) {
+    if (/Unauthorized/i.test(e.message)) {
+      toast('Session expired — please sign in again', 'err', 4000);
+      apvLogout();
+    } else {
+      toast('❌ ' + e.message, 'err', 5000);
+    }
+  }
+}
+
+function apvOpenChangesModal(idx) {
+  const it = APV.pending[idx];
+  if (!it) return;
+  APV.currentItem = it;
+  APV.remarks = {};
+  // Dedupe + canonicalize paramList. Keep the cleanest casing of each variant.
+  const seen = new Map();          // key → display
+  const order = [];
+  const raw = {};                  // key → raw param name to send back
+  (it.paramList || []).forEach(rawName => {
+    const { display, key } = _apvCanonParam(rawName);
+    if (!key) return;
+    // Prefer all-caps display if multiple variants exist (looks more "canonical")
+    const existing = seen.get(key);
+    if (!existing) {
+      seen.set(key, display);
+      order.push(key);
+      raw[key] = rawName;
+    } else {
+      // If existing is mixed-case and new is all-caps, prefer all-caps
+      if (display === display.toUpperCase() && existing !== existing.toUpperCase()) {
+        seen.set(key, display);
+        raw[key] = rawName;
+      }
+    }
+  });
+  APV.paramOrder = order;
+  APV.paramRaw = raw;
+  APV.canonDisplay = seen;
+
+  document.getElementById('apvChangesSubtitle').textContent =
+    `${it.clientName} · ${it.projectName} · ${it.revision}`;
+  document.getElementById('apvGlobalNote').value = '';
+  _apvRenderParamList();
+  _apvRenderRemarksSummary();
+  document.getElementById('apvChangesModal').classList.add('show');
+}
+
+function apvCloseChangesModal() {
+  document.getElementById('apvChangesModal').classList.remove('show');
+  APV.currentItem = null;
+  APV.remarks = {};
+}
+
+function _apvRenderParamList() {
+  const container = document.getElementById('apvParamList');
+  const html = APV.paramOrder.map(key => {
+    const display = APV.canonDisplay.get(key);
+    const hasRemark = APV.remarks[key] && APV.remarks[key].trim();
+    const bgColor = hasRemark ? '#fff8e1' : '#fff';
+    const borderColor = hasRemark ? '#ffb300' : '#e9ecef';
+    const icon = hasRemark ? '✎' : '+';
+    return `
+      <div onclick="apvOpenRemarkEditor('${_attr(key)}')"
+           style="padding:9px 12px; background:${bgColor}; border:1px solid ${borderColor}; border-radius:5px; margin-bottom:6px; cursor:pointer; display:flex; align-items:center; gap:10px; font-size:13px; transition:all 0.15s;"
+           onmouseover="this.style.borderColor='var(--brand-primary)'"
+           onmouseout="this.style.borderColor='${borderColor}'">
+        <span style="color:${hasRemark ? '#ffb300' : '#aaa'}; font-weight:700; font-size:14px;">${icon}</span>
+        <span style="font-weight:${hasRemark ? '600' : '500'}; flex:1;">${_esc(display)}</span>
+        ${hasRemark ? `<span style="font-size:11px; color:#664d03; max-width:140px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${_esc(APV.remarks[key])}</span>` : ''}
+      </div>
+    `;
+  }).join('');
+  container.innerHTML = html || '<em style="color:#aaa; font-size:12px;">No parameters in this revision.</em>';
+}
+
+function _apvRenderRemarksSummary() {
+  const container = document.getElementById('apvRemarksSummary');
+  const filled = APV.paramOrder.filter(k => APV.remarks[k] && APV.remarks[k].trim());
+  document.getElementById('apvRemarkCount').textContent = filled.length ? `(${filled.length})` : '';
+  if (filled.length === 0) {
+    container.innerHTML = '<em style="color:#aaa; font-size:12px;">No remarks yet. Click a parameter on the left to add one.</em>';
+    return;
+  }
+  container.innerHTML = filled.map(key => `
+    <div style="padding:10px 12px; background:#fff8e1; border-left:3px solid #ffb300; border-radius:3px; margin-bottom:8px; font-size:13px;">
+      <div style="font-weight:700; color:#664d03; margin-bottom:3px;">${_esc(APV.canonDisplay.get(key))}</div>
+      <div style="white-space:pre-wrap; color:#333;">${_esc(APV.remarks[key])}</div>
+    </div>
+  `).join('');
+}
+
+function _attr(s) { return String(s).replace(/['"\\]/g, '\\$&'); }
+
+function apvOpenRemarkEditor(key) {
+  APV.editingParam = key;
+  document.getElementById('apvRemarkEditorTitle').textContent =
+    APV.canonDisplay.get(key) || 'Edit remark';
+  document.getElementById('apvRemarkText').value = APV.remarks[key] || '';
+  document.getElementById('apvDeleteRemarkBtn').style.display = APV.remarks[key] ? '' : 'none';
+  document.getElementById('apvRemarkEditor').classList.add('show');
+  setTimeout(() => document.getElementById('apvRemarkText').focus(), 50);
+}
+
+function apvCloseRemarkEditor() {
+  document.getElementById('apvRemarkEditor').classList.remove('show');
+  APV.editingParam = null;
+}
+
+function apvSaveRemark() {
+  const key = APV.editingParam;
+  if (!key) return;
+  const txt = document.getElementById('apvRemarkText').value.trim();
+  if (txt) {
+    APV.remarks[key] = txt;
+  } else {
+    delete APV.remarks[key];
+  }
+  apvCloseRemarkEditor();
+  _apvRenderParamList();
+  _apvRenderRemarksSummary();
+}
+
+function apvDeleteRemark() {
+  const key = APV.editingParam;
+  if (!key) return;
+  delete APV.remarks[key];
+  apvCloseRemarkEditor();
+  _apvRenderParamList();
+  _apvRenderRemarksSummary();
+}
+
+async function apvSubmitChanges() {
+  const it = APV.currentItem;
+  if (!it) return;
+  const filledKeys = Object.keys(APV.remarks).filter(k => APV.remarks[k] && APV.remarks[k].trim());
+  const globalNote = document.getElementById('apvGlobalNote').value.trim();
+  if (filledKeys.length === 0 && !globalNote) {
+    toast('Add at least one remark before submitting', 'err', 4000);
+    return;
+  }
+  // Build the remarks object keyed by RAW param name (what server stored in paramList)
+  const remarksToSend = {};
+  filledKeys.forEach(key => {
+    const rawName = APV.paramRaw[key] || APV.canonDisplay.get(key);
+    remarksToSend[rawName] = APV.remarks[key];
+  });
+  const btn = document.getElementById('apvSubmitChangesBtn');
+  const orig = btn.textContent;
+  btn.disabled = true; btn.textContent = 'Submitting…';
+  try {
+    const r = await fetch(`${RENDER_URL}/api/request-changes`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        project: it.project,
+        revision: it.revision,
+        token: APV.token,
+        remarks: remarksToSend,
+        globalNote: globalNote || null
+      })
+    });
+    const d = await r.json();
+    if (!r.ok || !d.success) throw new Error(d.error || 'Submit failed');
+    toast(`✎ Changes requested — costing team notified (${filledKeys.length} remark${filledKeys.length === 1 ? '' : 's'})`, 'ok', 5000);
+    apvCloseChangesModal();
+    loadApprovalsList();
+  } catch (e) {
+    if (/Unauthorized/i.test(e.message)) {
+      toast('Session expired — please sign in again', 'err', 4000);
+      apvLogout();
+    } else {
+      toast('❌ ' + e.message, 'err', 5000);
+    }
+  } finally {
+    btn.disabled = false; btn.textContent = orig;
+  }
+}
+
 
 // =========================================================
 // PROJECTS / REVISIONS (Build C)
