@@ -708,6 +708,34 @@ app.get('/api/get-project-revision-pdf', async (req, res) => {
     }
 });
 
+// Streaming variant — returns the raw PDF bytes with proper Content-Type so iframes
+// can load it directly without base64 decoding (used by the Approvals page).
+app.get('/api/stream-project-revision-pdf', async (req, res) => {
+    try {
+        const { project, revision } = req.query;
+        if (!project || !revision) {
+            return res.status(400).json({ success: false, error: 'Missing project or revision' });
+        }
+        const targetEmail = process.env.TARGET_USER_EMAIL;
+        const path = `:/Metfraa_Costing_App/Generated_Costings/${project}/PDF/${revision}.pdf:`;
+        const stream = await graphClient
+            .api(`/users/${targetEmail}/drive/root${path}/content`)
+            .responseType('arraybuffer')
+            .get();
+        const buf = Buffer.from(stream);
+        res.set({
+            'Content-Type': 'application/pdf',
+            'Content-Length': buf.length,
+            'Content-Disposition': `inline; filename="${revision}.pdf"`,
+            'Cache-Control': 'private, max-age=60'
+        });
+        res.send(buf);
+    } catch (error) {
+        console.error('stream-project-revision-pdf error:', error.message);
+        res.status(error.statusCode || 500).json({ success: false, error: error.message });
+    }
+});
+
 // =============================================================
 // Centralised analytics Excel (Build E)
 // Appends one row per parameter per saved quote to:

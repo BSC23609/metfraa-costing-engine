@@ -137,6 +137,7 @@ body { font-family: 'Segoe UI', Tahoma, sans-serif; background: var(--brand-grey
     <button class="app-header-btn" id="refreshBtn" onclick="refreshDB()" title="Reload master data from OneDrive">⟳ Refresh</button>
     <button class="app-header-btn" id="projectsBtn" onclick="navProjects()" title="View saved projects and their revisions">📁 Projects</button>
     <button class="app-header-btn" id="approvalsBtn" onclick="navApprovals()" title="Review pending costing estimations (Arasu only)">✅ Approvals</button>
+    <button class="app-header-btn" id="pendingBtn" onclick="navPendingEstimates()" title="View revisions with requested changes">📋 Pending Estimates</button>
     <button class="app-header-btn" id="settingsBtn" onclick="navSettings()">⚙ Settings</button>
     <img class="brand-logo" id="brandLogo" src="Metfraa.png" alt="METFRAA" onerror="this.style.display='none'">
     <img id="groupLogo" src="Group_Logo.png" alt="" style="display:none;" onerror="this.style.display='none'">
@@ -656,7 +657,37 @@ body { font-family: 'Segoe UI', Tahoma, sans-serif; background: var(--brand-grey
     <div class="btn-row"><button class="btn btn-secondary" onclick="goToPage(1)">◀ Back to Step 1</button></div>
   </div>
 
-  <!-- APPROVALS PASSWORD MODAL -->
+  <!-- PENDING ESTIMATES PAGE (public, no password) — for the costing team -->
+  <div id="pagePending" class="page">
+    <div class="card">
+      <div class="section-title">
+        <span>📋 Pending Estimates · Changes Requested</span>
+        <button class="btn btn-secondary" onclick="loadPendingList()" style="font-size:11px; padding:5px 12px;">⟳ Refresh</button>
+      </div>
+      <p style="font-size:12px; color:#666; margin-bottom:10px;">
+        Costing estimations where Arasu has requested changes. Open the original PDF, review his remarks, then click "Start Revision" to create the next revision with these changes addressed.
+      </p>
+      <div id="pendingListContainer">
+        <em style="color:#888;">Loading…</em>
+      </div>
+    </div>
+    <div class="btn-row"><button class="btn btn-secondary" onclick="goToPage(1)">◀ Back to Step 1</button></div>
+  </div>
+
+  <!-- REMARKS VIEW MODAL (read-only, used by Pending list and Project Detail) -->
+  <div id="remarksViewModal" class="modal-bg">
+    <div class="modal" style="max-width:720px; max-height:85vh; padding:0; display:flex; flex-direction:column;">
+      <div style="padding:14px 22px; border-bottom:1px solid #eee; flex-shrink:0;">
+        <h3 style="margin:0; color:var(--brand-primary);">Requested Changes</h3>
+        <div id="remarksViewSubtitle" style="font-size:12px; color:#666; margin-top:3px;"></div>
+      </div>
+      <div id="remarksViewBody" style="overflow-y:auto; padding:18px 22px; flex:1;">
+      </div>
+      <div style="padding:12px 22px; border-top:1px solid #eee; flex-shrink:0; text-align:right;">
+        <button class="btn btn-secondary" onclick="closeRemarksView()">Close</button>
+      </div>
+    </div>
+  </div>
   <div id="apvPwdModal" class="modal-bg">
     <div class="modal" style="max-width:420px; padding:0;">
       <div style="padding:16px 24px; border-bottom:1px solid #eee;">
@@ -2074,9 +2105,10 @@ function _apvRenderCard(it, idx) {
   const submitted = it.submittedAt ? _apvRelativeTime(it.submittedAt) : '';
   const pdfUrl = it.pdfUrl || '';
   const escId = `apvCard_${idx}`;
-  // Embedded PDF — use OneDrive's embed mode by appending ?web=1 to the web URL.
-  // If the URL contains "sharepoint.com", we use the embed view via &amp;action=embedview
-  const embedUrl = _apvBuildEmbedUrl(pdfUrl);
+  // Stream the PDF through our server (avoids OneDrive auth prompt inside iframe).
+  const streamUrl = `${RENDER_URL}/api/stream-project-revision-pdf`
+    + `?project=${encodeURIComponent(it.project)}`
+    + `&revision=${encodeURIComponent(it.revision)}`;
   return `
     <div id="${escId}" style="background:#fff; border:1px solid #e9ecef; border-radius:8px; padding:0; margin-bottom:16px; overflow:hidden;">
       <div style="padding:14px 18px; background:#f8fafc; border-bottom:1px solid #e9ecef;">
@@ -2093,27 +2125,17 @@ function _apvRenderCard(it, idx) {
           <div style="display:flex; flex-direction:column; gap:6px; flex-shrink:0;">
             <button class="btn btn-primary" style="padding:6px 14px; font-size:13px;" onclick="apvApprove(${idx})">✓ Approve</button>
             <button class="btn btn-secondary" style="padding:6px 14px; font-size:13px;" onclick="apvOpenChangesModal(${idx})">✎ Request Changes</button>
-            ${pdfUrl ? `<a class="btn btn-secondary" style="padding:6px 14px; font-size:11px; text-decoration:none; text-align:center;" href="${pdfUrl}" target="_blank">↗ Open in new tab</a>` : ''}
+            <a class="btn btn-secondary" style="padding:6px 14px; font-size:11px; text-decoration:none; text-align:center;" href="${streamUrl}" target="_blank">↗ Open in new tab</a>
           </div>
         </div>
       </div>
-      ${embedUrl ? `<iframe src="${embedUrl}" style="width:100%; height:680px; border:0; display:block;" sandbox="allow-scripts allow-same-origin allow-forms allow-popups"></iframe>` : '<div style="padding:20px; color:#999; font-style:italic;">No PDF preview available — open the OneDrive link.</div>'}
+      <iframe src="${streamUrl}" style="width:100%; height:680px; border:0; display:block; background:#525659;" title="${_esc(it.revision)}"></iframe>
     </div>
   `;
 }
 
-// Convert a OneDrive PDF webUrl to its embed-viewer variant
-function _apvBuildEmbedUrl(webUrl) {
-  if (!webUrl) return '';
-  try {
-    // SharePoint / OneDrive personal share links: append &action=embedview (or ?web=1)
-    if (webUrl.includes('sharepoint.com') || webUrl.includes('1drv.ms')) {
-      const sep = webUrl.includes('?') ? '&' : '?';
-      return webUrl + sep + 'action=embedview&wdAr=1.7777777777777777';
-    }
-    return webUrl;
-  } catch (_) { return webUrl; }
-}
+// (Legacy helper kept for reference — no longer used since we stream PDFs locally)
+function _apvBuildEmbedUrl(webUrl) { return webUrl || ''; }
 
 function _esc(s) {
   return String(s || '').replace(/[<>&"]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]));
@@ -2327,8 +2349,283 @@ async function apvSubmitChanges() {
 
 
 // =========================================================
-// PROJECTS / REVISIONS (Build C)
+// PENDING ESTIMATES (Phase 3) — public list of changes_requested revisions
 // =========================================================
+let _pendingItems = [];
+
+function navPendingEstimates() {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.step-indicator').forEach(s => s.classList.remove('active'));
+  document.getElementById('pagePending').classList.add('active');
+  document.getElementById('wizardSteps').style.display = 'none';
+  window.scrollTo(0, 0);
+  loadPendingList();
+}
+
+async function loadPendingList() {
+  const c = document.getElementById('pendingListContainer');
+  c.innerHTML = '<em style="color:#888;">Loading…</em>';
+  try {
+    const r = await fetch(`${RENDER_URL}/api/list-changes-requested`);
+    const d = await r.json();
+    if (!d.success) throw new Error(d.error || 'Failed');
+    _pendingItems = d.items || [];
+    if (_pendingItems.length === 0) {
+      c.innerHTML = `<div style="padding:30px; text-align:center; background:#f8f9fa; border-radius:6px;">
+        <div style="font-size:32px; opacity:0.4;">📭</div>
+        <div style="font-size:14px; color:#666; margin-top:6px;">No revisions with requested changes.</div>
+      </div>`;
+      return;
+    }
+    c.innerHTML = _pendingItems.map((it, idx) => _renderPendingCard(it, idx)).join('');
+  } catch (e) {
+    c.innerHTML = `<div style="color:#dc3545; padding:12px; background:#fff5f5; border:1px solid #ffd5d5; border-radius:4px;">Error: ${e.message}</div>`;
+  }
+}
+
+function _renderPendingCard(it, idx) {
+  const decided = it.decidedAt ? _apvRelativeTime(it.decidedAt) : '';
+  const remarkCount = it.remarks ? Object.keys(it.remarks).filter(k => it.remarks[k]).length : 0;
+  const streamUrl = `${RENDER_URL}/api/stream-project-revision-pdf`
+    + `?project=${encodeURIComponent(it.project)}`
+    + `&revision=${encodeURIComponent(it.revision)}`;
+  // Build remarks HTML
+  let remarksHtml = '';
+  const filledRemarks = it.remarks ? Object.entries(it.remarks).filter(([, v]) => v && String(v).trim()) : [];
+  if (filledRemarks.length > 0) {
+    remarksHtml = filledRemarks.map(([param, txt]) => `
+      <div style="padding:9px 12px; background:#fff8e1; border-left:3px solid #ffb300; border-radius:3px; margin-bottom:6px; font-size:13px;">
+        <div style="font-weight:700; color:#664d03; margin-bottom:3px; font-size:12px;">${_esc(_apvCanonParam(param).display)}</div>
+        <div style="white-space:pre-wrap; color:#333;">${_esc(txt)}</div>
+      </div>
+    `).join('');
+  }
+  if (it.globalNote) {
+    remarksHtml += `
+      <div style="padding:9px 12px; background:#e3f2fd; border-left:3px solid #1976d2; border-radius:3px; margin-bottom:6px; margin-top:8px; font-size:13px;">
+        <div style="font-weight:700; color:#0d47a1; margin-bottom:3px; font-size:12px;">OVERALL NOTE</div>
+        <div style="white-space:pre-wrap; color:#333;">${_esc(it.globalNote)}</div>
+      </div>
+    `;
+  }
+  if (!remarksHtml) remarksHtml = '<em style="color:#aaa; font-size:12px;">No remarks recorded.</em>';
+
+  return `
+    <div id="pendCard_${idx}" style="background:#fff; border:1px solid #e9ecef; border-radius:8px; padding:0; margin-bottom:16px; overflow:hidden;">
+      <div style="padding:14px 18px; background:#fff8e1; border-bottom:1px solid #ffe082;">
+        <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:14px;">
+          <div style="min-width:0; flex:1;">
+            <div style="font-size:16px; font-weight:700; color:var(--brand-primary);">${_esc(it.clientName || '—')} · ${_esc(it.projectName || '—')}</div>
+            <div style="font-size:12px; color:#666; margin-top:3px; font-family:monospace;">
+              ${_esc(it.ref || '—')} · ${_esc(it.revision)} · changes requested ${decided}
+            </div>
+            <div style="font-size:12px; color:#664d03; margin-top:3px; font-weight:600;">
+              ✎ ${remarkCount} remark${remarkCount === 1 ? '' : 's'}${it.globalNote ? ' + overall note' : ''}
+            </div>
+          </div>
+          <div style="display:flex; flex-direction:column; gap:6px; flex-shrink:0;">
+            <button class="btn btn-primary" style="padding:6px 14px; font-size:13px;" onclick="startRevisionFromPending(${idx})">↗ Start Revision</button>
+            <a class="btn btn-secondary" style="padding:6px 14px; font-size:11px; text-decoration:none; text-align:center;" href="${streamUrl}" target="_blank">↗ View Original PDF</a>
+          </div>
+        </div>
+      </div>
+      <div style="display:grid; grid-template-columns: 1fr 1fr; gap:0;">
+        <div style="padding:14px 18px; border-right:1px solid #f0f0f0;">
+          <div style="font-size:11px; font-weight:700; text-transform:uppercase; color:#666; margin-bottom:8px;">Original Costing</div>
+          <iframe src="${streamUrl}" style="width:100%; height:420px; border:1px solid #eee; border-radius:4px; background:#525659;" title="${_esc(it.revision)}"></iframe>
+        </div>
+        <div style="padding:14px 18px;">
+          <div style="font-size:11px; font-weight:700; text-transform:uppercase; color:#666; margin-bottom:8px;">Arasu's Remarks</div>
+          <div style="max-height:420px; overflow-y:auto;">${remarksHtml}</div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+async function startRevisionFromPending(idx) {
+  const it = _pendingItems[idx];
+  if (!it) return;
+  if (!confirm(`Start a new revision of "${it.clientName} · ${it.projectName}"?\n\nThis loads R${it.revision.match(/_R(\d+)/)?.[1] || '?'} into the wizard. Make Arasu's requested changes, then Save — it will become the next revision (R+1).`)) return;
+  try {
+    const res = await fetch(`${RENDER_URL}/api/get-project-revision?project=${encodeURIComponent(it.project)}&revision=${encodeURIComponent(it.revision)}`);
+    const data = await res.json();
+    if (!data.success) throw new Error(data.error || 'Failed');
+    const saved = data.data;
+    if (!saved || !saved.details) throw new Error('Saved JSON missing project details');
+    _currentProject = it.project;
+    _applySavedQuotation(saved);
+    toast(`✏ Loaded ${it.revision} — make Arasu's requested changes, then Save`, 'ok', 5500);
+    goToPage(1);
+  } catch (e) {
+    toast('❌ ' + e.message, 'err', 5000);
+  }
+}
+
+// =========================================================
+// REMARKS VIEW MODAL — read-only display used by Project Detail page
+// =========================================================
+async function viewRevisionRemarks(revisionName) {
+  if (!_currentProject) { toast('No project selected', 'err'); return; }
+  try {
+    const r = await fetch(`${RENDER_URL}/api/approval-status?project=${encodeURIComponent(_currentProject)}&revision=${encodeURIComponent(revisionName)}`);
+    const d = await r.json();
+    if (!d.success || !d.found) throw new Error('No approval record found for this revision');
+    _openRemarksView(d.data, revisionName);
+  } catch (e) {
+    toast('❌ ' + e.message, 'err', 5000);
+  }
+}
+
+function _openRemarksView(entry, revisionName) {
+  document.getElementById('remarksViewSubtitle').textContent = `${entry.clientName || ''} · ${entry.projectName || ''} · ${revisionName}`;
+  const body = document.getElementById('remarksViewBody');
+  const filledRemarks = entry.remarks ? Object.entries(entry.remarks).filter(([, v]) => v && String(v).trim()) : [];
+  let html = '';
+  if (filledRemarks.length === 0 && !entry.globalNote) {
+    html = '<em style="color:#aaa;">No remarks on file.</em>';
+  } else {
+    if (filledRemarks.length > 0) {
+      html += '<div style="font-size:11px; font-weight:700; text-transform:uppercase; color:#666; margin-bottom:8px;">Per-Parameter Remarks</div>';
+      html += filledRemarks.map(([param, txt]) => `
+        <div style="padding:10px 12px; background:#fff8e1; border-left:3px solid #ffb300; border-radius:3px; margin-bottom:8px;">
+          <div style="font-weight:700; color:#664d03; margin-bottom:3px; font-size:13px;">${_esc(_apvCanonParam(param).display)}</div>
+          <div style="white-space:pre-wrap; color:#333; font-size:13px;">${_esc(txt)}</div>
+        </div>
+      `).join('');
+    }
+    if (entry.globalNote) {
+      html += '<div style="font-size:11px; font-weight:700; text-transform:uppercase; color:#666; margin:14px 0 8px;">Overall Note</div>';
+      html += `
+        <div style="padding:10px 12px; background:#e3f2fd; border-left:3px solid #1976d2; border-radius:3px; font-size:13px;">
+          <div style="white-space:pre-wrap; color:#333;">${_esc(entry.globalNote)}</div>
+        </div>
+      `;
+    }
+    if (entry.decidedAt) {
+      html += `<div style="font-size:11px; color:#999; margin-top:14px;">Decided at: ${new Date(entry.decidedAt).toLocaleString('en-IN')}</div>`;
+    }
+  }
+  body.innerHTML = html;
+  document.getElementById('remarksViewModal').classList.add('show');
+}
+
+function closeRemarksView() {
+  document.getElementById('remarksViewModal').classList.remove('show');
+}
+
+// =========================================================
+// STATUS BADGE — visual indicator of an approval state
+// =========================================================
+function _statusBadge(status) {
+  const styles = {
+    pending:           { bg:'#fff3cd', fg:'#664d03', label:'⏳ Pending' },
+    approved:          { bg:'#d1f0d8', fg:'#155724', label:'✓ Approved' },
+    changes_requested: { bg:'#f8d7da', fg:'#721c24', label:'✎ Changes' },
+    archived:          { bg:'#e2e3e5', fg:'#383d41', label:'⊘ Archived' },
+    no_submission:     { bg:'#f1f3f5', fg:'#868e96', label:'— No submission' }
+  };
+  const s = styles[status] || styles.no_submission;
+  return `<span style="display:inline-block; padding:3px 9px; border-radius:10px; background:${s.bg}; color:${s.fg}; font-size:11px; font-weight:600;">${s.label}</span>`;
+}
+
+// =========================================================
+// CUSTOMER QUOTE GATE — Phase 3: only generate after approval
+// =========================================================
+async function generateCustomerQuoteForRevision(revisionName) {
+  if (!_currentProject) { toast('No project selected', 'err'); return; }
+  // Verify status is still approved before loading
+  try {
+    const r = await fetch(`${RENDER_URL}/api/approval-status?project=${encodeURIComponent(_currentProject)}&revision=${encodeURIComponent(revisionName)}`);
+    const d = await r.json();
+    if (!d.success || !d.found || d.status !== 'approved') {
+      toast(`Cannot generate customer quote — revision status is "${d.status || 'unknown'}"`, 'err', 5000);
+      return;
+    }
+    // Load the revision into the working state and jump to Customer Quote screen
+    const r2 = await fetch(`${RENDER_URL}/api/get-project-revision?project=${encodeURIComponent(_currentProject)}&revision=${encodeURIComponent(revisionName)}`);
+    const d2 = await r2.json();
+    if (!d2.success) throw new Error(d2.error || 'Failed');
+    if (!d2.data || !d2.data.details) throw new Error('Saved JSON missing project details');
+    _applySavedQuotation(d2.data);
+    toast(`📄 Loaded approved ${revisionName} — opening Customer Quote`, 'ok', 3500);
+    setTimeout(() => openCustomerQuote(), 600);
+  } catch (e) {
+    toast('❌ ' + e.message, 'err', 5000);
+  }
+}
+
+// =========================================================
+// HASH ROUTING — supports deep links from email CTAs:
+//   #approvals                                — opens Approvals page (login prompt)
+//   #approvals/<project>/<revision>           — opens Approvals + scrolls to card
+//   #pending                                  — opens Pending Estimates (public)
+//   #pending/<project>/<revision>             — opens Pending Estimates + scrolls
+//   #projects                                 — opens Projects list
+//   #projects/<project>                       — opens that project's revisions
+//   #projects/<project>/<revision>            — opens project + scrolls to revision
+// =========================================================
+function _routeFromHash() {
+  const hash = (location.hash || '').replace(/^#/, '');
+  if (!hash) return;
+  const parts = hash.split('/').map(decodeURIComponent);
+  const target = parts[0];
+  const project = parts[1];
+  const revision = parts[2];
+  if (target === 'approvals') {
+    navApprovals();
+    // After list loads, scroll to the matching card
+    if (project && revision) {
+      setTimeout(() => _scrollToCard('apvCard_', APV.pending, project, revision), 1400);
+    }
+  } else if (target === 'pending') {
+    navPendingEstimates();
+    if (project && revision) {
+      setTimeout(() => _scrollToCard('pendCard_', _pendingItems, project, revision), 1400);
+    }
+  } else if (target === 'projects') {
+    if (project) {
+      openProjectRevisions(project);
+      if (revision) setTimeout(() => _highlightRevision(revision), 1400);
+    } else {
+      navProjects();
+    }
+  }
+}
+
+function _scrollToCard(idPrefix, list, project, revision) {
+  const idx = (list || []).findIndex(it => it.project === project && it.revision === revision);
+  if (idx < 0) return;
+  const el = document.getElementById(idPrefix + idx);
+  if (el) {
+    el.scrollIntoView({ behavior:'smooth', block:'start' });
+    el.style.boxShadow = '0 0 0 3px var(--brand-primary)';
+    setTimeout(() => { el.style.boxShadow = ''; }, 2500);
+  }
+}
+
+function _highlightRevision(revisionName) {
+  // Find the row in the project detail page containing this revision name and flash it
+  const container = document.getElementById('projectRevisionsContainer');
+  if (!container) return;
+  const rows = container.querySelectorAll('[style*="grid-template-columns"]');
+  rows.forEach(row => {
+    if (row.textContent.includes(revisionName)) {
+      row.style.background = '#fff8e1';
+      row.scrollIntoView({ behavior:'smooth', block:'center' });
+      setTimeout(() => { row.style.background = ''; }, 2500);
+    }
+  });
+}
+
+// Listen for hash changes (user clicks a different deep link) and on initial load
+window.addEventListener('hashchange', _routeFromHash);
+window.addEventListener('DOMContentLoaded', () => {
+  // Slight delay so the rest of the app initialises first
+  setTimeout(_routeFromHash, 500);
+});
+
+
 let _currentProject = null;
 let _currentRevision = null;
 
@@ -2383,18 +2680,28 @@ async function openProjectRevisions(projectFolder) {
   const c = document.getElementById('projectRevisionsContainer');
   c.innerHTML = '<em style="color:#888;">Loading revisions…</em>';
   try {
-    const res = await fetch(`${RENDER_URL}/api/list-project-revisions?project=${encodeURIComponent(projectFolder)}`);
-    const data = await res.json();
+    // Load BOTH the file listing AND the approval history in parallel
+    const [resList, resApproval] = await Promise.all([
+      fetch(`${RENDER_URL}/api/list-project-revisions?project=${encodeURIComponent(projectFolder)}`),
+      fetch(`${RENDER_URL}/api/project-history?project=${encodeURIComponent(projectFolder)}`)
+    ]);
+    const data = await resList.json();
     if (!data.success) throw new Error(data.error || 'Failed');
+    const approvalData = await resApproval.json();
+    // Build a map: revisionName → approval state
+    const approvalMap = {};
+    if (approvalData.success && Array.isArray(approvalData.revisions)) {
+      approvalData.revisions.forEach(r => { approvalMap[r.revision] = r; });
+    }
     if (!data.revisions || data.revisions.length === 0) {
       c.innerHTML = '<em style="color:#aaa;">No revisions found.</em>';
       return;
     }
-    let html = `<div style="display:grid; grid-template-columns: 60px 1fr 180px 100px 230px; gap:10px; font-size:12px; font-weight:700; text-transform:uppercase; color:#666; padding:8px 0; border-bottom:2px solid #e9ecef;">
+    let html = `<div style="display:grid; grid-template-columns: 60px 1fr 170px 150px 260px; gap:10px; font-size:12px; font-weight:700; text-transform:uppercase; color:#666; padding:8px 0; border-bottom:2px solid #e9ecef;">
       <div style="text-align:center;">Rev</div>
       <div>File Name</div>
       <div>Saved On</div>
-      <div style="text-align:center;">JSON</div>
+      <div style="text-align:center;">Status</div>
       <div style="text-align:right;">Actions</div>
     </div>`;
     data.revisions.forEach(r => {
@@ -2402,18 +2709,27 @@ async function openProjectRevisions(projectFolder) {
       const dateStr = isNaN(date.getTime()) ? '—' : date.toLocaleString('en-IN', { dateStyle:'medium', timeStyle:'short' });
       const revSafe = r.name.replace(/'/g,"\\'");
       const revLabel = r.revisionNumber === 0 ? 'R0' : `R${r.revisionNumber}`;
-      const loadBtn = r.hasJson
-        ? `<button class="btn btn-warn" style="font-size:11px; padding:5px 10px;" onclick="loadRevisionAsEditable('${revSafe}')">✎ Load as new revision</button>`
-        : '<span style="color:#999; font-size:11px;">no json</span>';
-      html += `<div style="display:grid; grid-template-columns: 60px 1fr 180px 100px 230px; gap:10px; align-items:center; font-size:13px; padding:10px 0; border-bottom:1px solid #f3f3f3;">
+      const ap = approvalMap[r.name];
+      const status = ap ? ap.status : 'no_submission';
+      const badge = _statusBadge(status);
+      // Build actions based on status
+      const actions = [];
+      actions.push(`<button class="btn btn-secondary" style="font-size:11px; padding:5px 10px;" onclick="viewRevision('${revSafe}')">👁 View</button>`);
+      if (status === 'approved') {
+        actions.push(`<button class="btn btn-primary" style="font-size:11px; padding:5px 10px;" onclick="generateCustomerQuoteForRevision('${revSafe}')" title="Open customer quote">📄 Customer Quote</button>`);
+      }
+      if (status === 'changes_requested') {
+        actions.push(`<button class="btn btn-warn" style="font-size:11px; padding:5px 10px;" onclick="viewRevisionRemarks('${revSafe}')">✎ View Remarks</button>`);
+      }
+      if (r.hasJson) {
+        actions.push(`<button class="btn btn-secondary" style="font-size:11px; padding:5px 10px;" onclick="loadRevisionAsEditable('${revSafe}')">↗ Load as new rev</button>`);
+      }
+      html += `<div style="display:grid; grid-template-columns: 60px 1fr 170px 150px 260px; gap:10px; align-items:center; font-size:13px; padding:10px 0; border-bottom:1px solid #f3f3f3;">
         <div style="text-align:center;"><span style="background:var(--brand-primary); color:white; padding:3px 10px; border-radius:4px; font-weight:600; font-size:11px;">${revLabel}</span></div>
-        <div style="font-family:monospace; font-size:12px; color:#444;">${escapeHtml(r.name)}</div>
+        <div style="font-family:monospace; font-size:12px; color:#444; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${escapeHtml(r.name)}">${escapeHtml(r.name)}</div>
         <div style="color:#666; font-size:12px;">${dateStr}</div>
-        <div style="text-align:center;">${r.hasJson ? '✅' : '—'}</div>
-        <div style="text-align:right; display:flex; gap:6px; justify-content:flex-end;">
-          <button class="btn btn-secondary" style="font-size:11px; padding:5px 10px;" onclick="viewRevision('${revSafe}')">👁 View</button>
-          ${loadBtn}
-        </div>
+        <div style="text-align:center;">${badge}</div>
+        <div style="text-align:right; display:flex; gap:5px; justify-content:flex-end; flex-wrap:wrap;">${actions.join('')}</div>
       </div>`;
     });
     c.innerHTML = html;
@@ -2830,21 +3146,46 @@ async function saveAndProceedToCustomerQuote() {
     const revLabel = data.revision === 0 ? 'R0 (initial)' : `R${data.revision}`;
     // Approval status — Phase 1 of the approval workflow auto-submits every save.
     let approvalNote = '';
+    let approvalOK = true;
     if (data.approval) {
       if (data.approval.status === 'pending') {
-        approvalNote = ' · ⏳ Submitted for approval (arasu notified)';
+        approvalNote = '⏳ Submitted to arasu@metfraa.com for approval. You will be notified once approved.';
       } else if (data.approval.status === 'error') {
+        approvalOK = false;
         const detail = data.approval.message || data.approval.body || 'unknown';
-        approvalNote = ` · ⚠ Approval submission failed: ${String(detail).slice(0,180)}`;
+        approvalNote = `⚠ Approval submission failed: ${String(detail).slice(0,180)}`;
         console.error('Approval submission error (full):', data.approval);
       }
     } else {
-      approvalNote = ' · ⚠ No approval status returned (old server.js?)';
+      approvalOK = false;
+      approvalNote = '⚠ No approval status returned (old server.js?)';
     }
-    if (stat) stat.innerHTML = `<span style="color:#28a745;">✓ Saved as <strong>${data.pdf?.fileName || 'PDF'}</strong> (${revLabel}).${approvalNote}</span>`;
-    toast(`☁ Saved ${revLabel}${approvalNote ? ' · ' + (data.approval.status === 'pending' ? 'submitted for approval' : 'approval error — see console') : ''}`, data.approval?.status === 'error' ? 'err' : 'ok', 5000);
-    // Brief delay so user sees the success message before nav
-    setTimeout(() => openCustomerQuote(), 900);
+    // Build the post-save banner. We NO LONGER auto-jump to Customer Quote — the customer
+    // quote is gated on Arasu approving. The user is told what's happened and given the
+    // option to go to the project view (with status badges) where they can act later.
+    const projectSafe = data.projectFolder || '';
+    const projectSafeJs = projectSafe.replace(/'/g, "\\'");
+    if (stat) {
+      stat.innerHTML = `
+        <div style="padding:14px 16px; background:${approvalOK ? '#e8f5e9' : '#fff5f5'}; border:1px solid ${approvalOK ? '#a5d6a7' : '#ffd5d5'}; border-radius:6px;">
+          <div style="font-size:14px; font-weight:700; color:${approvalOK ? '#2e7d32' : '#c62828'}; margin-bottom:4px;">
+            ✓ Saved as <strong>${data.pdf?.fileName || 'PDF'}</strong> (${revLabel})
+          </div>
+          <div style="font-size:13px; color:#555; margin-bottom:10px;">${approvalNote}</div>
+          <div style="display:flex; gap:8px; flex-wrap:wrap;">
+            <button class="btn btn-secondary" style="font-size:12px; padding:6px 14px;" onclick="navProjects()">📁 View All Projects</button>
+            ${projectSafe ? `<button class="btn btn-secondary" style="font-size:12px; padding:6px 14px;" onclick="openProjectRevisions('${projectSafeJs}')">📂 Open This Project</button>` : ''}
+            ${data.pdf?.webUrl ? `<a class="btn btn-secondary" style="font-size:12px; padding:6px 14px; text-decoration:none;" href="${data.pdf.webUrl}" target="_blank">↗ View PDF</a>` : ''}
+          </div>
+        </div>
+      `;
+    }
+    toast(`☁ Saved ${revLabel} · ${approvalOK ? 'submitted for approval' : 'approval error'}`, approvalOK ? 'ok' : 'err', 5000);
+    // NB: previously the app auto-jumped to Customer Quote here. Phase 3 removed that —
+    // Customer Quote is now gated on the revision being approved. User reaches it from
+    // the project detail page when status === 'approved'.
+    btn.disabled = false;
+    btn.innerText = origText;
   } catch (e) {
     if (stat) stat.innerHTML = `<span style="color:#dc3545;">❌ ${e.message}</span>`;
     toast('❌ ' + e.message, 'err', 6000);
