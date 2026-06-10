@@ -3616,7 +3616,8 @@ function generatePreview() {
       <div class="pi-item"><div class="pi-lbl">Distance</div><div class="pi-val">${d.dist} km</div></div>
       <div class="pi-item"><div class="pi-lbl">Total Area</div><div class="pi-val">${fmtNum(d.area,0)} sqm</div></div>
       <div class="pi-item"><div class="pi-lbl">Steel Tonnage</div><div class="pi-val">${fmtNum(d.tonnage,2)} MT</div></div>
-      <div class="pi-item"><div class="pi-lbl">Safety</div><div class="pi-val">${d.safety}</div></div>
+      <div class="pi-item"><div class="pi-lbl">Erection Safety</div><div class="pi-val">${d.erSafetyLabel || '—'}</div></div>
+      <div class="pi-item"><div class="pi-lbl">Conversion</div><div class="pi-val">${d.projConversionChargeName || '—'}</div></div>
     </div>
   </div>
   <div class="card" style="margin-top:14px;">

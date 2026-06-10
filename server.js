@@ -310,6 +310,7 @@ app.post('/api/save-quotation', async (req, res) => {
 
         // Revision detection (PER-PROJECT scope): look inside <projectFolder>/PDF/ for existing baseName(_Rn).pdf
         let safeName = baseName;
+        let maxRev = -1;
         try {
             const pdfFolderPath = `:/Metfraa_Costing_App/Generated_Costings/${projectFolder}/PDF:`;
             const listing = await graphClient
@@ -321,7 +322,6 @@ app.post('/api/save-quotation', async (req, res) => {
                 .map(f => f.name.replace(/\.pdf$/i, ''));
             const escBase = baseName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
             const re = new RegExp(`^${escBase}(?:_R(\\d+))?$`, 'i');
-            let maxRev = -1;
             existing.forEach(n => {
                 const m = n.match(re);
                 if (m) {
@@ -333,6 +333,33 @@ app.post('/api/save-quotation', async (req, res) => {
         } catch (listErr) {
             // Folder doesn't exist yet — first save, use baseName as-is
             console.log(`First save for project "${projectFolder}" — folder will be auto-created.`);
+        }
+
+        // Safety net against Graph API listing staleness (a fresh save's file
+        // can take a few seconds to appear in folder listings). Probe the computed
+        // target path directly — if it already exists, bump revision and re-probe.
+        // We do at most 10 probes (well beyond any realistic stale-listing depth).
+        for (let probe = 0; probe < 10; probe++) {
+            const probePath = `:/Metfraa_Costing_App/Generated_Costings/${projectFolder}/PDF/${safeName}.pdf:`;
+            let collision = false;
+            try {
+                await graphClient
+                    .api(`/users/${targetEmail}/drive/root${probePath}`)
+                    .select('id,name')
+                    .get();
+                collision = true; // 200 means file exists
+            } catch (e) {
+                // 404 means free — break out
+                collision = false;
+            }
+            if (!collision) break;
+            // File exists at safeName — bump to the next revision
+            const m = safeName.match(/_R(\d+)$/i);
+            const currentRev = m ? parseInt(m[1], 10) : 0; // baseName (no suffix) = rev 0
+            const nextRev = currentRev + 1;
+            safeName = `${baseName}_R${nextRev}`;
+            if (nextRev > maxRev) maxRev = nextRev;
+            console.log(`Collision detected — bumping to ${safeName}`);
         }
 
         const results = { revision: safeName === baseName ? 0 : parseInt(safeName.match(/_R(\d+)$/i)[1], 10), projectFolder };
