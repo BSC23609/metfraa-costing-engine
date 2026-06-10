@@ -390,6 +390,71 @@ app.post('/api/save-quotation', async (req, res) => {
         // Append a row to the centralised analytics Excel (Build E)
         try { await appendAnalyticsRow(jsonData, safeName, projectFolder); } catch (_) {}
 
+        // Auto-submit this revision for approval (Phase 1 — approval workflow).
+        // Saving = submitting. Old pending auto-archives. Email to arasu fire-and-forget.
+        try {
+            const parsedJson = (() => {
+                if (!jsonData) return {};
+                if (typeof jsonData === 'string') { try { return JSON.parse(jsonData); } catch (_) { return {}; } }
+                return jsonData;
+            })();
+            const det = (parsedJson && parsedJson.details) || {};
+            const sels = (parsedJson && parsedJson.selections) || {};
+            const paramList = Object.keys(sels);
+
+            const approvalState = await readApprovalsState();
+            if (!approvalState[projectFolder]) approvalState[projectFolder] = { latestPending: null, revisions: {} };
+            archivePreviousPending(approvalState[projectFolder]);
+            approvalState[projectFolder].revisions[safeName] = {
+                status: 'pending',
+                submittedAt: new Date().toISOString(),
+                submittedBy: det.client || '',
+                ref: det.ref || '',
+                projectName: det.name || '',
+                clientName: det.client || '',
+                pdfUrl: (results.pdf && results.pdf.webUrl) || null,
+                jsonUrl: (results.json && results.json.webUrl) || null,
+                tonnage: det.tonnage != null ? det.tonnage : null,
+                area: det.area != null ? det.area : null,
+                location: det.loc || null,
+                paramList,
+                decidedAt: null,
+                remarks: {},
+                globalNote: null
+            };
+            approvalState[projectFolder].latestPending = safeName;
+            await writeApprovalsState(approvalState);
+
+            // Fire approval email — fire-and-forget so save isn't blocked on SMTP
+            const cta = buildDeepLink('approvals', projectFolder, safeName);
+            const html = buildEmailHtml({
+                title: 'Costing Estimation — Approval Required',
+                intro: `A new costing estimation has been submitted for your review.`,
+                infoRows: [
+                    ['Client', det.client || '—'],
+                    ['Project', det.name || '—'],
+                    ['Quote Ref', det.ref || '—'],
+                    ['Revision', safeName],
+                    ['Location', det.loc || '—'],
+                    ['Tonnage', det.tonnage ? `${det.tonnage} MT` : '—'],
+                    ['Area', det.area ? `${det.area} sqm` : '—'],
+                    ['PDF', (results.pdf && results.pdf.webUrl) ? `<a href="${results.pdf.webUrl}" style="color:#0066b3;">View on OneDrive</a>` : '—']
+                ],
+                ctaUrl: cta,
+                ctaLabel: '🔍 Review on App'
+            });
+            sendEmail({
+                to: APPROVER_EMAIL,
+                subject: `[Approval] ${det.client || ''} · ${det.name || ''} · ${safeName}`,
+                htmlBody: html
+            });
+
+            results.approval = { status: 'pending', submittedAt: approvalState[projectFolder].revisions[safeName].submittedAt };
+        } catch (approvalErr) {
+            console.error('Auto-submit-for-approval failed (save still succeeded):', approvalErr.message);
+            results.approval = { status: 'error', error: approvalErr.message };
+        }
+
         res.json({ success: true, ...results });
     } catch (error) {
         console.error("Save Quotation Error:", error.message);
@@ -644,6 +709,142 @@ app.get('/api/get-project-revision-pdf', async (req, res) => {
 const ANALYTICS_PATH = ':/Metfraa_Costing_App/Generated_Costings/_Analytics/cost_history.xlsx:';
 const SEQ_FLOOR_PATH = ':/Metfraa_Costing_App/Generated_Costings/_Analytics/seq_config.json:';
 const PROJECT_DEFAULTS_PATH = ':/Metfraa_Costing_App/Generated_Costings/_Analytics/project_defaults.json:';
+const APPROVALS_PATH = ':/Metfraa_Costing_App/Generated_Costings/_Analytics/approvals.json:';
+const APPROVER_EMAIL = 'arasu@metfraa.com';
+const COSTING_TEAM_EMAIL = 'costing@metfraa.com';
+const APP_BASE_URL = process.env.APP_BASE_URL || 'https://metfraa-costing-engine.onrender.com';
+
+// =========================================================
+// APPROVALS — read/write the central approvals.json on OneDrive.
+// Schema: { "<projectFolder>": { latestPending, revisions: { "<rev>": {...} } } }
+// =========================================================
+async function readApprovalsState() {
+    try {
+        const targetEmail = process.env.TARGET_USER_EMAIL;
+        const content = await graphClient
+            .api(`/users/${targetEmail}/drive/root${APPROVALS_PATH}/content`)
+            .get();
+        let parsed;
+        if (content && typeof content === 'object' && !Buffer.isBuffer(content)) {
+            parsed = content;
+        } else {
+            const text = typeof content === 'string' ? content
+                       : Buffer.isBuffer(content) ? content.toString('utf8')
+                       : String(content || '');
+            try { parsed = JSON.parse(text); } catch (_) { return {}; }
+        }
+        return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch (_) {
+        return {}; // No file yet → empty state
+    }
+}
+
+async function writeApprovalsState(state) {
+    const targetEmail = process.env.TARGET_USER_EMAIL;
+    const payload = JSON.stringify(state, null, 2);
+    return await graphClient
+        .api(`/users/${targetEmail}/drive/root${APPROVALS_PATH}/content`)
+        .header('Content-Type', 'application/json')
+        .put(payload);
+}
+
+// Helper: archive ALL non-decided (pending/changes_requested) revisions for a project
+// before submitting a new one. Mutates `projectEntry` in place.
+function archivePreviousPending(projectEntry) {
+    if (!projectEntry || !projectEntry.revisions) return;
+    Object.keys(projectEntry.revisions).forEach(revName => {
+        const r = projectEntry.revisions[revName];
+        if (r && (r.status === 'pending' || r.status === 'changes_requested')) {
+            r.status = 'archived';
+            r.archivedAt = new Date().toISOString();
+        }
+    });
+    projectEntry.latestPending = null;
+}
+
+// =========================================================
+// EMAIL HELPER — sends via Microsoft Graph using the TARGET_USER_EMAIL identity.
+// Uses /users/{targetEmail}/sendMail (app-only auth, no SMTP credentials needed).
+// =========================================================
+async function sendEmail({ to, cc, subject, htmlBody }) {
+    try {
+        const targetEmail = process.env.TARGET_USER_EMAIL;
+        if (!targetEmail) {
+            console.warn('sendEmail skipped — TARGET_USER_EMAIL not set');
+            return false;
+        }
+        const toList = Array.isArray(to) ? to : [to];
+        const ccList = cc ? (Array.isArray(cc) ? cc : [cc]) : [];
+        const message = {
+            message: {
+                subject: subject || '(no subject)',
+                body: { contentType: 'HTML', content: htmlBody || '' },
+                toRecipients: toList.filter(Boolean).map(a => ({ emailAddress: { address: a } })),
+                ccRecipients: ccList.filter(Boolean).map(a => ({ emailAddress: { address: a } }))
+            },
+            saveToSentItems: true
+        };
+        await graphClient
+            .api(`/users/${targetEmail}/sendMail`)
+            .post(message);
+        console.log(`📧 sent: "${subject}" → ${toList.join(', ')}`);
+        return true;
+    } catch (err) {
+        console.error('sendEmail error:', err.message, err.statusCode || '');
+        return false;
+    }
+}
+
+// HTML email template — branded header, info table, primary CTA button, footer.
+function buildEmailHtml({ title, intro, infoRows, ctaUrl, ctaLabel, paramRemarks }) {
+    const rows = (infoRows || []).map(r =>
+        `<tr><td style="padding:6px 12px 6px 0; color:#666; font-weight:600; vertical-align:top;">${r[0]}</td>
+             <td style="padding:6px 0; color:#222;">${r[1]}</td></tr>`
+    ).join('');
+
+    let remarksBlock = '';
+    if (paramRemarks && Object.keys(paramRemarks).length) {
+        const remarkRows = Object.entries(paramRemarks)
+            .filter(([, txt]) => txt && String(txt).trim())
+            .map(([param, txt]) =>
+                `<tr><td style="padding:8px 14px 8px 0; color:#002b5f; font-weight:600; vertical-align:top; width:35%;">${param}</td>
+                     <td style="padding:8px 0; color:#333; white-space:pre-wrap;">${String(txt).replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]))}</td></tr>`
+            ).join('');
+        if (remarkRows) {
+            remarksBlock = `
+                <div style="margin:20px 0 6px; padding:14px 16px; background:#fff8e1; border-left:4px solid #ffb300; border-radius:4px;">
+                    <div style="font-weight:700; color:#664d03; margin-bottom:8px;">Requested Changes</div>
+                    <table style="width:100%; border-collapse:collapse; font-size:13px;">${remarkRows}</table>
+                </div>
+            `;
+        }
+    }
+
+    return `<!DOCTYPE html>
+<html><body style="margin:0; padding:0; background:#f4f6f9; font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;">
+  <table cellpadding="0" cellspacing="0" border="0" width="100%" style="background:#f4f6f9; padding:24px 0;">
+    <tr><td align="center">
+      <table cellpadding="0" cellspacing="0" border="0" width="600" style="background:#fff; border-radius:8px; box-shadow:0 1px 4px rgba(0,0,0,0.06); overflow:hidden;">
+        <tr><td style="background:#002b5f; padding:18px 24px;">
+          <div style="color:#fff; font-size:18px; font-weight:700;">METFRAA · Costing Workflow</div>
+        </td></tr>
+        <tr><td style="padding:22px 28px;">
+          <h2 style="margin:0 0 12px; color:#002b5f; font-size:20px; font-weight:700;">${title || ''}</h2>
+          <p style="margin:0 0 18px; color:#555; font-size:14px; line-height:1.5;">${intro || ''}</p>
+          <table style="width:100%; border-collapse:collapse; font-size:13px; margin-bottom:10px;">${rows}</table>
+          ${remarksBlock}
+          ${ctaUrl ? `<div style="margin:24px 0 6px;">
+            <a href="${ctaUrl}" style="display:inline-block; background:#0066b3; color:#fff; text-decoration:none; padding:11px 22px; border-radius:5px; font-weight:600; font-size:14px;">${ctaLabel || 'Open'}</a>
+          </div>` : ''}
+        </td></tr>
+        <tr><td style="background:#f9fafb; padding:14px 28px; color:#888; font-size:11px; border-top:1px solid #eee;">
+          This is an automated message from the METFRAA Costing Engine.
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body></html>`;
+}
 
 // Read project defaults (margin %, gst %) — fall back to hardcoded 12 / 18 if no file
 async function readProjectDefaults() {
@@ -1051,6 +1252,375 @@ app.post('/api/set-defaults', async (req, res) => {
         res.json({ success: true, margin: m, gst: g });
     } catch (error) {
         console.error('set-defaults error:', error.message);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// =============================================================
+// APPROVAL WORKFLOW ENDPOINTS
+// =============================================================
+
+// Helper: build a deep-link to the in-app routes (used in email CTAs)
+function buildDeepLink(route, project, revision) {
+    const q = encodeURIComponent(project);
+    const r = encodeURIComponent(revision);
+    return `${APP_BASE_URL}/#${route}/${q}/${r}`;
+}
+
+// POST /api/arasu-auth  — body { password }
+// Returns { success: true, token: "<opaque>" } if password matches ARASU_APPROVAL_PASSWORD.
+// Token is a simple HMAC-of-current-day; frontend stashes it and sends back on every approval action.
+const _arasuTokenSecret = process.env.ARASU_APPROVAL_PASSWORD || '';
+function _makeArasuToken() {
+    // Token = base64(YYYYMMDD + ":" + sha256(YYYYMMDD + secret)) — valid for current UTC day
+    const crypto = require('crypto');
+    const day = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+    const hash = crypto.createHash('sha256').update(day + _arasuTokenSecret).digest('hex').slice(0, 24);
+    return Buffer.from(`${day}:${hash}`).toString('base64');
+}
+function _verifyArasuToken(token) {
+    if (!token || !_arasuTokenSecret) return false;
+    try {
+        const decoded = Buffer.from(token, 'base64').toString('utf8');
+        const [day, hash] = decoded.split(':');
+        if (!day || !hash) return false;
+        const crypto = require('crypto');
+        const expected = crypto.createHash('sha256').update(day + _arasuTokenSecret).digest('hex').slice(0, 24);
+        // Accept tokens from today or yesterday (24-48 hour validity, simpler than tracking expiry)
+        const today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+        const yest = new Date(Date.now() - 86400_000).toISOString().slice(0, 10).replace(/-/g, '');
+        return hash === expected && (day === today || day === yest);
+    } catch (_) { return false; }
+}
+
+app.post('/api/arasu-auth', async (req, res) => {
+    const { password } = req.body || {};
+    if (!process.env.ARASU_APPROVAL_PASSWORD) {
+        return res.status(500).json({ success: false, error: 'ARASU_APPROVAL_PASSWORD env var not configured' });
+    }
+    if (password !== process.env.ARASU_APPROVAL_PASSWORD) {
+        return res.status(401).json({ success: false, error: 'Invalid password' });
+    }
+    res.json({ success: true, token: _makeArasuToken() });
+});
+
+// POST /api/submit-for-approval
+// Body: { project, revision, clientName, projectName, ref, pdfUrl, jsonUrl, params: [<paramName>] }
+// Called automatically after a successful save. Archives any older pending for this project,
+// sets the new one as pending, emails arasu.
+app.post('/api/submit-for-approval', async (req, res) => {
+    try {
+        const { project, revision, clientName, projectName, ref, pdfUrl, jsonUrl, params, tonnage, area, location } = req.body || {};
+        if (!project || !revision) {
+            return res.status(400).json({ success: false, error: 'Missing project or revision' });
+        }
+        const state = await readApprovalsState();
+        if (!state[project]) state[project] = { latestPending: null, revisions: {} };
+        // Archive any non-decided revisions for this project
+        archivePreviousPending(state[project]);
+        // Add the new pending revision
+        state[project].revisions[revision] = {
+            status: 'pending',
+            submittedAt: new Date().toISOString(),
+            submittedBy: clientName || '',
+            ref: ref || '',
+            projectName: projectName || '',
+            clientName: clientName || '',
+            pdfUrl: pdfUrl || null,
+            jsonUrl: jsonUrl || null,
+            tonnage: tonnage || null,
+            area: area || null,
+            location: location || null,
+            paramList: Array.isArray(params) ? params : [],
+            decidedAt: null,
+            remarks: {},
+            globalNote: null
+        };
+        state[project].latestPending = revision;
+        await writeApprovalsState(state);
+
+        // Fire the approval email to Arasu (non-blocking — don't fail the save if email errors)
+        const cta = buildDeepLink('approvals', project, revision);
+        const html = buildEmailHtml({
+            title: 'Costing Estimation — Approval Required',
+            intro: `A new costing estimation has been submitted for your review.`,
+            infoRows: [
+                ['Client', clientName || '—'],
+                ['Project', projectName || '—'],
+                ['Quote Ref', ref || '—'],
+                ['Revision', revision],
+                ['Location', location || '—'],
+                ['Tonnage', tonnage ? `${tonnage} MT` : '—'],
+                ['Area', area ? `${area} sqm` : '—'],
+                ['PDF', pdfUrl ? `<a href="${pdfUrl}" style="color:#0066b3;">View on OneDrive</a>` : '—']
+            ],
+            ctaUrl: cta,
+            ctaLabel: '🔍 Review on App'
+        });
+        // Fire-and-forget: the approval state is what matters, email is secondary
+        sendEmail({ to: APPROVER_EMAIL, subject: `[Approval] ${clientName || ''} · ${projectName || ''} · ${revision}`, htmlBody: html });
+
+        res.json({ success: true, status: 'pending', project, revision });
+    } catch (error) {
+        console.error('submit-for-approval error:', error.message);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// POST /api/approve-revision
+// Body: { project, revision, token }   (token from /api/arasu-auth)
+app.post('/api/approve-revision', async (req, res) => {
+    try {
+        const { project, revision, token } = req.body || {};
+        if (!_verifyArasuToken(token)) {
+            return res.status(401).json({ success: false, error: 'Unauthorized — invalid or expired token' });
+        }
+        if (!project || !revision) {
+            return res.status(400).json({ success: false, error: 'Missing project or revision' });
+        }
+        const state = await readApprovalsState();
+        const entry = state[project] && state[project].revisions[revision];
+        if (!entry) {
+            return res.status(404).json({ success: false, error: 'Revision not found' });
+        }
+        if (entry.status !== 'pending') {
+            return res.status(400).json({ success: false, error: `Cannot approve — current status is "${entry.status}"` });
+        }
+        entry.status = 'approved';
+        entry.decidedAt = new Date().toISOString();
+        entry.remarks = {};
+        if (state[project].latestPending === revision) state[project].latestPending = null;
+        await writeApprovalsState(state);
+
+        // Email costing team
+        const cta = buildDeepLink('projects', project, revision);
+        const html = buildEmailHtml({
+            title: '✓ Costing Estimation — Approved',
+            intro: `The following costing estimation has been approved. You can now proceed to generate the customer quote.`,
+            infoRows: [
+                ['Client', entry.clientName || '—'],
+                ['Project', entry.projectName || '—'],
+                ['Quote Ref', entry.ref || '—'],
+                ['Revision', revision],
+                ['Approved at', entry.decidedAt]
+            ],
+            ctaUrl: cta,
+            ctaLabel: '📄 Open Project'
+        });
+        sendEmail({ to: COSTING_TEAM_EMAIL, subject: `[Approved] ${entry.clientName || ''} · ${entry.projectName || ''} · ${revision}`, htmlBody: html });
+
+        res.json({ success: true, status: 'approved', project, revision });
+    } catch (error) {
+        console.error('approve-revision error:', error.message);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// POST /api/request-changes
+// Body: { project, revision, token, remarks: { paramName: "text", ... }, globalNote }
+app.post('/api/request-changes', async (req, res) => {
+    try {
+        const { project, revision, token, remarks, globalNote } = req.body || {};
+        if (!_verifyArasuToken(token)) {
+            return res.status(401).json({ success: false, error: 'Unauthorized — invalid or expired token' });
+        }
+        if (!project || !revision) {
+            return res.status(400).json({ success: false, error: 'Missing project or revision' });
+        }
+        // Require at least one non-empty remark
+        const remarkObj = remarks && typeof remarks === 'object' ? remarks : {};
+        const cleaned = {};
+        Object.entries(remarkObj).forEach(([k, v]) => {
+            if (v && String(v).trim()) cleaned[k] = String(v).trim();
+        });
+        if (Object.keys(cleaned).length === 0 && !(globalNote && String(globalNote).trim())) {
+            return res.status(400).json({ success: false, error: 'Add at least one remark before requesting changes' });
+        }
+        const state = await readApprovalsState();
+        const entry = state[project] && state[project].revisions[revision];
+        if (!entry) {
+            return res.status(404).json({ success: false, error: 'Revision not found' });
+        }
+        if (entry.status !== 'pending') {
+            return res.status(400).json({ success: false, error: `Cannot request changes — current status is "${entry.status}"` });
+        }
+        entry.status = 'changes_requested';
+        entry.decidedAt = new Date().toISOString();
+        entry.remarks = cleaned;
+        entry.globalNote = globalNote && String(globalNote).trim() ? String(globalNote).trim() : null;
+        if (state[project].latestPending === revision) state[project].latestPending = null;
+        await writeApprovalsState(state);
+
+        // Email costing team with remarks
+        const cta = buildDeepLink('pending', project, revision);
+        const html = buildEmailHtml({
+            title: '✎ Costing Estimation — Changes Requested',
+            intro: `The reviewer has requested changes on the costing estimation. Please review the remarks below and open a new revision to address them.`,
+            infoRows: [
+                ['Client', entry.clientName || '—'],
+                ['Project', entry.projectName || '—'],
+                ['Quote Ref', entry.ref || '—'],
+                ['Revision', revision],
+                ['Decided at', entry.decidedAt]
+            ],
+            paramRemarks: cleaned,
+            ctaUrl: cta,
+            ctaLabel: '📋 Open in App'
+        });
+        sendEmail({ to: COSTING_TEAM_EMAIL, subject: `[Changes Requested] ${entry.clientName || ''} · ${entry.projectName || ''} · ${revision}`, htmlBody: html });
+
+        res.json({ success: true, status: 'changes_requested', project, revision, remarks: cleaned });
+    } catch (error) {
+        console.error('request-changes error:', error.message);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// GET /api/list-pending-approvals
+// Returns all revisions across all projects with status="pending" (for Arasu's page).
+app.get('/api/list-pending-approvals', async (req, res) => {
+    try {
+        const state = await readApprovalsState();
+        const items = [];
+        Object.entries(state).forEach(([project, entry]) => {
+            if (!entry || !entry.revisions) return;
+            Object.entries(entry.revisions).forEach(([rev, data]) => {
+                if (data && data.status === 'pending') {
+                    items.push({ project, revision: rev, ...data });
+                }
+            });
+        });
+        items.sort((a, b) => new Date(b.submittedAt) - new Date(a.submittedAt));
+        res.json({ success: true, items });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// GET /api/list-changes-requested
+// Returns all revisions across all projects with status="changes_requested" (for Pending Estimates page).
+app.get('/api/list-changes-requested', async (req, res) => {
+    try {
+        const state = await readApprovalsState();
+        const items = [];
+        Object.entries(state).forEach(([project, entry]) => {
+            if (!entry || !entry.revisions) return;
+            Object.entries(entry.revisions).forEach(([rev, data]) => {
+                if (data && data.status === 'changes_requested') {
+                    items.push({ project, revision: rev, ...data });
+                }
+            });
+        });
+        items.sort((a, b) => new Date(b.decidedAt) - new Date(a.decidedAt));
+        res.json({ success: true, items });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// GET /api/approval-status?project=&revision=
+// Look up the approval state for a specific revision (used to gate the Customer Quote button).
+app.get('/api/approval-status', async (req, res) => {
+    try {
+        const { project, revision } = req.query || {};
+        if (!project || !revision) {
+            return res.status(400).json({ success: false, error: 'Missing project or revision' });
+        }
+        const state = await readApprovalsState();
+        const entry = state[project] && state[project].revisions[revision];
+        if (!entry) {
+            return res.json({ success: true, found: false, status: null });
+        }
+        res.json({ success: true, found: true, status: entry.status, data: entry });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// GET /api/dashboard-data
+// Aggregate metrics + per-project current status list (for the Dashboard page).
+app.get('/api/dashboard-data', async (req, res) => {
+    try {
+        const state = await readApprovalsState();
+        const now = new Date();
+        const thirtyDaysAgo = new Date(now.getTime() - 30 * 86400_000);
+
+        let pendingCount = 0, approvedCount = 0, changesCount = 0, archivedCount = 0;
+        let approvedLast30 = 0;
+        const projects = [];
+
+        Object.entries(state).forEach(([projectFolder, entry]) => {
+            if (!entry || !entry.revisions) return;
+            const revs = Object.entries(entry.revisions);
+            // Latest revision = most recently submitted
+            revs.sort((a, b) => new Date(b[1].submittedAt || 0) - new Date(a[1].submittedAt || 0));
+            const latest = revs[0];
+            let projectStatus = 'unknown';
+            let lastSubmitted = null;
+            let lastDecided = null;
+            let clientName = '', projectName = '', ref = '';
+            if (latest) {
+                projectStatus = latest[1].status || 'unknown';
+                lastSubmitted = latest[1].submittedAt || null;
+                lastDecided = latest[1].decidedAt || null;
+                clientName = latest[1].clientName || '';
+                projectName = latest[1].projectName || '';
+                ref = latest[1].ref || '';
+            }
+            revs.forEach(([_, r]) => {
+                if (r.status === 'pending') pendingCount++;
+                else if (r.status === 'approved') {
+                    approvedCount++;
+                    if (r.decidedAt && new Date(r.decidedAt) >= thirtyDaysAgo) approvedLast30++;
+                }
+                else if (r.status === 'changes_requested') changesCount++;
+                else if (r.status === 'archived') archivedCount++;
+            });
+            projects.push({
+                project: projectFolder,
+                clientName, projectName, ref,
+                latestRevision: latest ? latest[0] : null,
+                status: projectStatus,
+                lastSubmitted, lastDecided,
+                revisionCount: revs.length
+            });
+        });
+
+        projects.sort((a, b) => new Date(b.lastSubmitted || 0) - new Date(a.lastSubmitted || 0));
+
+        res.json({
+            success: true,
+            metrics: {
+                pending: pendingCount,
+                changesRequested: changesCount,
+                approved: approvedCount,
+                approvedLast30Days: approvedLast30,
+                archived: archivedCount,
+                totalProjects: projects.length
+            },
+            projects
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// GET /api/project-history?project=
+// Full revision history for one project (used by Dashboard click-through).
+app.get('/api/project-history', async (req, res) => {
+    try {
+        const { project } = req.query || {};
+        if (!project) return res.status(400).json({ success: false, error: 'Missing project' });
+        const state = await readApprovalsState();
+        const entry = state[project];
+        if (!entry || !entry.revisions) {
+            return res.json({ success: true, project, revisions: [] });
+        }
+        const list = Object.entries(entry.revisions)
+            .map(([rev, data]) => ({ revision: rev, ...data }))
+            .sort((a, b) => new Date(b.submittedAt || 0) - new Date(a.submittedAt || 0));
+        res.json({ success: true, project, revisions: list });
+    } catch (error) {
         res.status(500).json({ success: false, error: error.message });
     }
 });
