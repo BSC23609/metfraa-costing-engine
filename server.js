@@ -451,8 +451,15 @@ app.post('/api/save-quotation', async (req, res) => {
 
             results.approval = { status: 'pending', submittedAt: approvalState[projectFolder].revisions[safeName].submittedAt };
         } catch (approvalErr) {
-            console.error('Auto-submit-for-approval failed (save still succeeded):', approvalErr.message);
-            results.approval = { status: 'error', error: approvalErr.message };
+            // Surface as much detail as possible — Graph errors have statusCode + body + code
+            const detail = {
+                message: approvalErr && approvalErr.message,
+                code: approvalErr && (approvalErr.code || approvalErr.statusCode),
+                statusCode: approvalErr && approvalErr.statusCode,
+                body: approvalErr && (approvalErr.body || approvalErr.responseBody || null)
+            };
+            console.error('❌ AUTO-SUBMIT FOR APPROVAL FAILED:', JSON.stringify(detail, null, 2));
+            results.approval = { status: 'error', ...detail };
         }
 
         res.json({ success: true, ...results });
@@ -790,7 +797,13 @@ async function sendEmail({ to, cc, subject, htmlBody }) {
         console.log(`📧 sent: "${subject}" → ${toList.join(', ')}`);
         return true;
     } catch (err) {
-        console.error('sendEmail error:', err.message, err.statusCode || '');
+        const detail = {
+            message: err && err.message,
+            statusCode: err && err.statusCode,
+            code: err && err.code,
+            body: err && (err.body || err.responseBody || null)
+        };
+        console.error('❌ sendEmail error:', JSON.stringify(detail, null, 2));
         return false;
     }
 }
@@ -1623,6 +1636,75 @@ app.get('/api/project-history', async (req, res) => {
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
     }
+});
+
+// GET /api/approval-selftest
+// Diagnostic endpoint — runs each step of the approval pipeline and reports what works/fails.
+// Hit this in browser after deploy to see which capability is broken.
+app.get('/api/approval-selftest', async (req, res) => {
+    const results = {};
+    const captureErr = (e) => ({
+        message: e && e.message,
+        statusCode: e && e.statusCode,
+        code: e && e.code,
+        body: e && (e.body || e.responseBody || null)
+    });
+
+    // 1. Env vars
+    results.env = {
+        TARGET_USER_EMAIL: !!process.env.TARGET_USER_EMAIL,
+        ARASU_APPROVAL_PASSWORD: !!process.env.ARASU_APPROVAL_PASSWORD,
+        APP_BASE_URL: process.env.APP_BASE_URL || '(default)',
+        APPROVER_EMAIL: APPROVER_EMAIL,
+        COSTING_TEAM_EMAIL: COSTING_TEAM_EMAIL
+    };
+
+    // 2. Can we read approvals.json (or get a clean 404 = file doesn't exist yet, which is fine)?
+    try {
+        const state = await readApprovalsState();
+        results.readApprovalsState = { ok: true, projectCount: Object.keys(state).length };
+    } catch (e) {
+        results.readApprovalsState = { ok: false, error: captureErr(e) };
+    }
+
+    // 3. Can we write to approvals.json? Round-trip a probe key, then remove it.
+    try {
+        const state = await readApprovalsState();
+        const probeKey = '__selftest_probe__';
+        state[probeKey] = { latestPending: null, revisions: {}, ts: new Date().toISOString() };
+        await writeApprovalsState(state);
+        // Remove the probe so it doesn't pollute real data
+        delete state[probeKey];
+        await writeApprovalsState(state);
+        results.writeApprovalsState = { ok: true };
+    } catch (e) {
+        results.writeApprovalsState = { ok: false, error: captureErr(e) };
+    }
+
+    // 4. Can we send a test email? (Only fires if ?sendEmail=1 to avoid spamming arasu.)
+    if (req.query.sendEmail === '1') {
+        try {
+            const html = buildEmailHtml({
+                title: 'Approval workflow — selftest',
+                intro: 'This is a diagnostic email from /api/approval-selftest. If you received it, Graph sendMail is working.',
+                infoRows: [['Sent at', new Date().toISOString()]],
+                ctaUrl: APP_BASE_URL,
+                ctaLabel: 'Open App'
+            });
+            const ok = await sendEmail({
+                to: APPROVER_EMAIL,
+                subject: '[selftest] Approval workflow diagnostic',
+                htmlBody: html
+            });
+            results.sendEmail = { ok, note: ok ? `email sent to ${APPROVER_EMAIL}` : 'sendEmail returned false — check server logs for details' };
+        } catch (e) {
+            results.sendEmail = { ok: false, error: captureErr(e) };
+        }
+    } else {
+        results.sendEmail = { skipped: true, note: 'add ?sendEmail=1 to actually send a test email to arasu@metfraa.com' };
+    }
+
+    res.json(results);
 });
 
 app.get('/api/list-quotations', async (req, res) => {

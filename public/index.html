@@ -2373,8 +2373,21 @@ async function saveAndProceedToCustomerQuote() {
     const data = await res.json();
     if (!data.success) throw new Error(data.error || 'Save failed');
     const revLabel = data.revision === 0 ? 'R0 (initial)' : `R${data.revision}`;
-    if (stat) stat.innerHTML = `<span style="color:#28a745;">✓ Saved as <strong>${data.pdf?.fileName || 'PDF'}</strong> (${revLabel}). Opening Customer Quote…</span>`;
-    toast(`☁ Saved ${revLabel}`, 'ok', 3000);
+    // Approval status — Phase 1 of the approval workflow auto-submits every save.
+    let approvalNote = '';
+    if (data.approval) {
+      if (data.approval.status === 'pending') {
+        approvalNote = ' · ⏳ Submitted for approval (arasu notified)';
+      } else if (data.approval.status === 'error') {
+        const detail = data.approval.message || data.approval.body || 'unknown';
+        approvalNote = ` · ⚠ Approval submission failed: ${String(detail).slice(0,180)}`;
+        console.error('Approval submission error (full):', data.approval);
+      }
+    } else {
+      approvalNote = ' · ⚠ No approval status returned (old server.js?)';
+    }
+    if (stat) stat.innerHTML = `<span style="color:#28a745;">✓ Saved as <strong>${data.pdf?.fileName || 'PDF'}</strong> (${revLabel}).${approvalNote}</span>`;
+    toast(`☁ Saved ${revLabel}${approvalNote ? ' · ' + (data.approval.status === 'pending' ? 'submitted for approval' : 'approval error — see console') : ''}`, data.approval?.status === 'error' ? 'err' : 'ok', 5000);
     // Brief delay so user sees the success message before nav
     setTimeout(() => openCustomerQuote(), 900);
   } catch (e) {
