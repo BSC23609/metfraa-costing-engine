@@ -403,7 +403,6 @@ body { font-family: 'Segoe UI', Tahoma, sans-serif; background: var(--brand-grey
 
     <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px 14px; font-size:13px; padding:12px; background:#fff8e1; border-radius:6px; margin-bottom:18px;">
       <div>Subtotal:</div><div style="text-align:right; font-family:monospace;" id="qpSubtotal">—</div>
-      <div>Margin:</div><div style="text-align:right; font-family:monospace; color:#666;" id="qpMargin">—</div>
       <div>GST:</div><div style="text-align:right; font-family:monospace; color:#666;" id="qpGST">—</div>
       <div style="font-weight:700; font-size:14px;">Grand Total:</div>
       <div style="text-align:right; font-family:monospace; font-weight:700; font-size:15px; color:var(--brand-primary);" id="qpGrand">—</div>
@@ -419,7 +418,7 @@ body { font-family: 'Segoe UI', Tahoma, sans-serif; background: var(--brand-grey
 <div class="wizard-steps" id="wizardSteps">
     <div id="step1-ind" class="step-indicator active">1. Project Info</div>
     <div id="step2-ind" class="step-indicator">2. Build Cost</div>
-    <div id="step3-ind" class="step-indicator">3. Margin & Round</div>
+    <div id="step3-ind" class="step-indicator">3. Round-up</div>
     <div id="step4-ind" class="step-indicator">4. Grand Total</div>
     <div id="step5-ind" class="step-indicator">5. Preview</div>
     <div id="step6-ind" class="step-indicator">6. Save</div>
@@ -549,16 +548,16 @@ body { font-family: 'Segoe UI', Tahoma, sans-serif; background: var(--brand-grey
         </div>
       </div>
     </div>
-    <div class="btn-row"><button class="btn btn-secondary" onclick="goToPage(1)">◀ Back to Step 1</button><button class="btn btn-primary" onclick="prepareStep3(); goToPage(3)">Continue to Margin & Rounding ➔</button></div>
+    <div class="btn-row"><button class="btn btn-secondary" onclick="goToPage(1)">◀ Back to Step 1</button><button class="btn btn-primary" onclick="prepareStep3(); goToPage(3)">Continue to Round-up ➔</button></div>
   </div>
 
   <!-- PAGE 3 -->
-  <!-- PAGE 3 — Margin & Rounding (per parameter) -->
+  <!-- PAGE 3 — Round-up (per parameter) -->
   <div id="page3" class="page">
     <div class="card">
-      <div class="section-title">Step 3 — Margin & Round-up</div>
+      <div class="section-title">Step 3 — Round-up</div>
       <p style="font-size:13px; color:#666; margin-bottom:12px;">
-        Adjust margin per parameter (defaults from Step 1) and toggle rounding. Rounding is applied to the post-margin <strong>unit cost</strong> per parameter — to the nearest ₹100 for structural members, nearest ₹10 for sheets/light items (set in the master sheet).
+        Toggle rounding per parameter. Rounding is applied to the unit cost — to the nearest ₹100 for structural members, nearest ₹10 for sheets/light items (set in the master sheet).
       </p>
       <div id="step3Grid"></div>
     </div>
@@ -575,7 +574,7 @@ body { font-family: 'Segoe UI', Tahoma, sans-serif; background: var(--brand-grey
       <div id="step4Grid"></div>
     </div>
     <div class="btn-row">
-      <button class="btn btn-secondary" onclick="goToPage(3)">◀ Back to Margin</button>
+      <button class="btn btn-secondary" onclick="goToPage(3)">◀ Back to Round-up</button>
       <button class="btn btn-primary" onclick="generatePreview(); goToPage(5)">Preview ➔</button>
     </div>
   </div>
@@ -1688,25 +1687,54 @@ function _showQuotationPreview(saved, qmeta) {
   const d = saved.details || {};
   const qtys = saved.qtys || {};
   const selections = saved.selections || {};
+  const step3Overrides = saved.step3 || {};
 
-  // Compute totals to show in preview
-  let grandSubtotal = 0;
-  Object.entries(selections).forEach(([param, subs]) => {
-    Object.values(subs).forEach(line => { if (line && line.line) grandSubtotal += line.line; });
-  });
+  // Compute per-param POST-MARGIN ROUNDED totals (what shows up in the final PDF).
+  // We mirror computeStep3ForParam's math here using saved data so the preview
+  // stays consistent with the PDF — and margin is never exposed as a line item.
   const margin = parseFloat(d.margin) || 12;
   const gst = parseFloat(d.gst) || 18;
-  const withMargin = grandSubtotal * (1 + margin / 100);
-  const grandTotal = withMargin * (1 + gst / 100);
+
+  function _previewParamTotal(pname) {
+    const subs = selections[pname] || {};
+    let preMarginTotal = 0;
+    Object.values(subs).forEach(line => {
+      if (line && typeof line.line === 'number') preMarginTotal += line.line;
+    });
+    const qty = parseFloat(qtys[pname]) || 0;
+    if (qty <= 0) return { paramTotal: 0, qty: 0 };
+    const ov = step3Overrides[pname] || { margin, roundEnabled: true };
+    const paramMargin = parseFloat(ov.margin);
+    const m = Number.isFinite(paramMargin) ? paramMargin : margin;
+    const unitPre = preMarginTotal / qty;
+    const unitPostMargin = unitPre * (1 + m / 100);
+    // Rounding unit: structural members → ₹100, sheets/light items → ₹10.
+    // Best-effort guess from the param's unit (MT → 100, anything else → 10).
+    const node = MASTER_DB[pname];
+    const paramUnit = node && node.__unit ? node.__unit : 'MT';
+    const ru = (String(paramUnit).toUpperCase() === 'MT') ? 100 : 10;
+    const unitRounded = ov.roundEnabled === false
+      ? Math.round(unitPostMargin)
+      : Math.round(unitPostMargin / ru) * ru;
+    return { paramTotal: unitRounded * qty, qty };
+  }
+
+  let grandSubtotal = 0;
+  const paramTotals = {};
+  Object.keys(selections).forEach(pname => {
+    const { paramTotal } = _previewParamTotal(pname);
+    paramTotals[pname] = paramTotal;
+    grandSubtotal += paramTotal;
+  });
+  const grandTotal = grandSubtotal * (1 + gst / 100);
 
   const fmt = n => '₹ ' + Math.round(n).toLocaleString('en-IN');
 
-  // Build the parameter summary table
+  // Build the parameter summary table (now showing post-margin rounded totals)
   let paramTable = '';
-  Object.entries(selections).forEach(([pname, subs]) => {
+  Object.keys(selections).forEach(pname => {
     const cleanName = cleanParamLabel(pname);
-    const lines = Object.values(subs).filter(s => s && s.line);
-    const paramTotal = lines.reduce((a, b) => a + (b.line || 0), 0);
+    const paramTotal = paramTotals[pname] || 0;
     const qty = qtys[pname] || '—';
     if (paramTotal === 0) return;
     paramTable += `<tr>
@@ -1728,8 +1756,9 @@ function _showQuotationPreview(saved, qmeta) {
   document.getElementById('qpTonnage').innerText = (d.tonnage || '—') + ' MT';
   document.getElementById('qpParamTable').innerHTML = paramTable || '<tr><td colspan="3" style="padding:10px; color:#888; text-align:center;">No costed items.</td></tr>';
   document.getElementById('qpSubtotal').innerText = fmt(grandSubtotal);
-  document.getElementById('qpMargin').innerText = `+${margin}% = ${fmt(withMargin - grandSubtotal)}`;
-  document.getElementById('qpGST').innerText = `+${gst}% = ${fmt(grandTotal - withMargin)}`;
+  // qpMargin element was removed from the panel — guard against missing element
+  const _qpM = document.getElementById('qpMargin'); if (_qpM) _qpM.innerText = `+${margin}% = ${fmt(grandTotal - grandSubtotal - (grandSubtotal * gst / 100))}`;
+  document.getElementById('qpGST').innerText = `+${gst}% = ${fmt(grandSubtotal * gst / 100)}`;
   document.getElementById('qpGrand').innerText = fmt(grandTotal);
 
   // Stash the saved data for the Edit button
@@ -3473,13 +3502,10 @@ function prepareStep3() {
 
   // Header
   let html = `
-    <div style="display:grid; grid-template-columns: 2.5fr 90px 100px 110px 120px 120px 130px; gap:8px 12px; align-items:center; font-size:12px; font-weight:700; text-transform:uppercase; color:#666; padding:6px 0; border-bottom:2px solid #e9ecef;">
+    <div style="display:grid; grid-template-columns: 3fr 110px 150px 170px; gap:8px 12px; align-items:center; font-size:12px; font-weight:700; text-transform:uppercase; color:#666; padding:6px 0; border-bottom:2px solid #e9ecef;">
       <div>Parameter</div>
       <div style="text-align:right;">Qty</div>
-      <div style="text-align:right;">Unit Cost (pre)</div>
-      <div style="text-align:right;">Margin %</div>
-      <div style="text-align:right;">Unit (post-marg)</div>
-      <div style="text-align:right;">Unit (rounded)</div>
+      <div style="text-align:right;">Unit Rate (rounded)</div>
       <div style="text-align:right;">Param Total</div>
     </div>
   `;
@@ -3489,14 +3515,10 @@ function prepareStep3() {
     const unit = (node && node.__unit) || 'MT';
     const c = computeStep3ForParam(p);
     const ov = projectState.step3[p];
-    const idSafe = p.replace(/[^a-z0-9]/gi,'_');
     html += `
-      <div style="display:grid; grid-template-columns: 2.5fr 90px 100px 110px 120px 120px 130px; gap:8px 12px; align-items:center; font-size:13px; padding:8px 0; border-bottom:1px solid #f0f0f0;">
+      <div style="display:grid; grid-template-columns: 3fr 110px 150px 170px; gap:8px 12px; align-items:center; font-size:13px; padding:8px 0; border-bottom:1px solid #f0f0f0;">
         <div style="font-weight:600;">${cleanParamLabel(p)} <span style="color:#888; font-weight:400; font-size:11px;">(round to ₹${c.roundingUnit})</span></div>
         <div style="text-align:right; color:#555;">${fmtNum(c.qty,2)} ${unit}</div>
-        <div style="text-align:right; color:#888; font-family:monospace;">${fmtINR(c.unitPre)}</div>
-        <div style="text-align:right;"><input type="number" step="0.1" value="${ov.margin}" data-step3-margin="${p.replace(/"/g,'&quot;')}" class="form-input" style="max-width:90px; padding:4px 8px; text-align:right;" oninput="onStep3MarginInput(this)"> %</div>
-        <div style="text-align:right; color:#666; font-family:monospace;">${fmtINR(c.unitPostMargin)}</div>
         <div style="text-align:right;"><label style="cursor:pointer; font-family:monospace; color:var(--brand-primary); font-weight:700;"><input type="checkbox" ${ov.roundEnabled?'checked':''} data-step3-round="${p.replace(/"/g,'&quot;')}" oninput="onStep3RoundToggle(this)" style="margin-right:4px;">${fmtINR(c.unitRounded)}</label></div>
         <div style="text-align:right; font-weight:700; color:var(--brand-primary); font-family:monospace;">${fmtINR(c.paramTotal)}</div>
       </div>
@@ -3573,7 +3595,7 @@ function prepareStep4() {
   html += `
     <div style="margin-top:18px; padding:14px 16px; background:#f8f9fa; border-radius:6px;">
       <div style="display:flex; justify-content:space-between; padding:5px 0; font-size:14px;">
-        <div style="color:#555;">Subtotal (post-margin, rounded)</div>
+        <div style="color:#555;">Subtotal</div>
         <div style="font-family:monospace; font-weight:600;">${fmtINR(grandTotal)}</div>
       </div>
       <div style="display:flex; justify-content:space-between; padding:5px 0; font-size:14px; color:#666;">
