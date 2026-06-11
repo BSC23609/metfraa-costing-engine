@@ -3559,13 +3559,20 @@ function onProjectTypeChange(value) {
 }
 
 function applyProjectTypeUI(value) {
-  // When ONLY SUPPLY, hide Erection Safety + Building Height fields (they only
-  // feed Fixing/Erection which doesn't apply in supply-only mode).
-  const erSafetyField = document.getElementById('erSafety') ? document.getElementById('erSafety').closest('.form-field') : null;
-  const heightField = document.getElementById('projHeight') ? document.getElementById('projHeight').closest('.form-field') : null;
+  // When ONLY SUPPLY, hide Erection Safety + Building Height + Erection Height
+  // Surcharge fields (they only feed Fixing/Erection which doesn't apply in
+  // supply-only mode).
   const isSupplyOnly = (value === 'only_supply');
+  const fieldFor = id => {
+    const el = document.getElementById(id);
+    return el ? el.closest('.form-field') : null;
+  };
+  const erSafetyField = fieldFor('erSafety');
+  const heightField = fieldFor('projHeight');
+  const erHeightField = fieldFor('erHeightDisplay');
   if (erSafetyField) erSafetyField.style.display = isSupplyOnly ? 'none' : '';
   if (heightField) heightField.style.display = isSupplyOnly ? 'none' : '';
+  if (erHeightField) erHeightField.style.display = isSupplyOnly ? 'none' : '';
 }
 
 // True if a subcategory should be EXCLUDED based on the current project type.
