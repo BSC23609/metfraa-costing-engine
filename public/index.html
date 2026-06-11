@@ -1952,6 +1952,13 @@ function closeQuotationPreview() {
 // =========================================================
 function goToPage(n) {
   if (n >= 2 && n <= 6) captureProjectDetails();
+  // When entering Step 2, refresh the virtual project-wide selections (Shot Blast,
+  // Fixed Charges Design/Conversion) AND rebuild the sidebar so the first param's
+  // workspace shows the correct rows on first paint — without needing nav-away-and-back.
+  if (n === 2) {
+    try { injectVirtualParameters(); } catch (e) { console.warn('injectVirtualParameters at goToPage(2):', e.message); }
+    try { initSidebar(); } catch (e) { console.warn('initSidebar at goToPage(2):', e.message); }
+  }
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.step-indicator').forEach(s => s.classList.remove('active'));
   const target = document.getElementById('page'+n);
@@ -3661,9 +3668,9 @@ function loadWorkspace(name, el) {
       const appliedLabel = applied ? `${applied.name}` : '(none selected — pick on Step 1)';
       const row = document.createElement('tr');
       row.dataset.projwide = sub;
-      row.style.background = '#fff8e1';
+      row.style.background = '#f1f8ff';
       row.innerHTML = `
-        <td>${sub} <span class="tag-rate" style="background:#ffe69c;color:#664d03;">PROJECT</span></td>
+        <td>${sub} <span class="tag-rate" style="background:#cfe2ff;color:#084298;">FROM STEP 1</span></td>
         <td class="projwide-name" style="font-style:italic; color:#555;">${appliedLabel} <span style="color:#999; font-size:10px;">(auto-generated from Step 1)</span></td>
         <td></td>
       `;
@@ -3697,7 +3704,7 @@ function loadWorkspace(name, el) {
         row.dataset.sub = 'RM COST';
         row.style.background = '#fff8e1';
         row.innerHTML = `
-          <td>RM COST <span class="tag-rate" style="background:#ffe69c;color:#664d03;">PROJECT</span></td>
+          <td>RM COST <span class="tag-rate" style="background:#ffe69c;color:#664d03;">PROJECT-SPECIFIC</span></td>
           <td>
             <input type="text" class="form-input rm-proj-name" placeholder="Option name (e.g. customer-supplied steel)"
                    value="${(pr.optionName || '').replace(/"/g,'&quot;')}" style="max-width:240px; margin-right:8px;">
