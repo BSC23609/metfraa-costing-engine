@@ -801,7 +801,7 @@ function archivePreviousPending(projectEntry) {
 // EMAIL HELPER — sends via Microsoft Graph using the TARGET_USER_EMAIL identity.
 // Uses /users/{targetEmail}/sendMail (app-only auth, no SMTP credentials needed).
 // =========================================================
-async function sendEmail({ to, cc, subject, htmlBody }) {
+async function sendEmail({ to, cc, subject, htmlBody, attachments }) {
     try {
         const targetEmail = process.env.TARGET_USER_EMAIL;
         if (!targetEmail) {
@@ -819,10 +819,21 @@ async function sendEmail({ to, cc, subject, htmlBody }) {
             },
             saveToSentItems: true
         };
+        // Optional attachments: [{ name: 'file.pdf', contentBytes: <Buffer or base64>, contentType: 'application/pdf' }]
+        if (Array.isArray(attachments) && attachments.length > 0) {
+            message.message.attachments = attachments.map(att => ({
+                '@odata.type': '#microsoft.graph.fileAttachment',
+                name: att.name || 'attachment',
+                contentType: att.contentType || 'application/octet-stream',
+                contentBytes: Buffer.isBuffer(att.contentBytes)
+                    ? att.contentBytes.toString('base64')
+                    : String(att.contentBytes || '')
+            }));
+        }
         await graphClient
             .api(`/users/${targetEmail}/sendMail`)
             .post(message);
-        console.log(`📧 sent: "${subject}" → ${toList.join(', ')}`);
+        console.log(`📧 sent: "${subject}" → ${toList.join(', ')}${attachments && attachments.length ? ` (+${attachments.length} attachment${attachments.length===1?'':'s'})` : ''}`);
         return true;
     } catch (err) {
         const detail = {
@@ -837,6 +848,131 @@ async function sendEmail({ to, cc, subject, htmlBody }) {
 }
 
 // HTML email template — branded header, info table, primary CTA button, footer.
+// =========================================================
+// REMARKS PDF (server-side) — generates a branded PDF containing
+// ONLY the per-parameter remarks + overall note (no rates or values).
+// Attached to the email sent to costing@metfraa.com when Arasu
+// requests changes. Also saved into the project's OneDrive folder.
+// =========================================================
+function buildRemarksPdfBuffer({ ref, revision, clientName, projectName, location, decidedAt, remarks, globalNote }) {
+    return new Promise((resolve, reject) => {
+        try {
+            const PDFDocument = require('pdfkit');
+            const doc = new PDFDocument({ size: 'A4', margins: { top: 50, bottom: 50, left: 40, right: 40 } });
+            const chunks = [];
+            doc.on('data', c => chunks.push(c));
+            doc.on('end', () => resolve(Buffer.concat(chunks)));
+            doc.on('error', reject);
+
+            const pageW = doc.page.width;
+            const leftMargin = 40;
+            const rightMargin = 40;
+            const contentW = pageW - leftMargin - rightMargin;
+
+            // Header band
+            doc.rect(0, 0, pageW, 70).fill('#ffffff');
+            doc.fillColor('#002b5f').font('Helvetica-Bold').fontSize(20)
+               .text('REQUESTED CHANGES', 0, 18, { align: 'center', width: pageW });
+            doc.fillColor('#002b5f').font('Helvetica-Bold').fontSize(12)
+               .text(clientName || '—', 0, 41, { align: 'center', width: pageW });
+            doc.fillColor('#666').font('Helvetica').fontSize(9)
+               .text(projectName || '—', 0, 56, { align: 'center', width: pageW });
+            // Divider
+            doc.rect(0, 70, pageW, 1.5).fill('#0066b3');
+
+            // Info table
+            let y = 90;
+            doc.fillColor('#333').font('Helvetica').fontSize(9);
+            const infoRows = [
+                ['Quote Ref',  ref || '—'],
+                ['Revision',   revision || '—'],
+                ['Client',     clientName || '—'],
+                ['Project',    projectName || '—'],
+                ['Location',   location || '—'],
+                ['Decided At', decidedAt ? new Date(decidedAt).toLocaleString('en-IN') : '—']
+            ];
+            infoRows.forEach(([k, v]) => {
+                doc.font('Helvetica-Bold').fillColor('#666').text(`${k}:`, leftMargin, y);
+                doc.font('Helvetica').fillColor('#222').text(String(v), leftMargin + 90, y);
+                y += 14;
+            });
+            y += 6;
+            doc.strokeColor('#002b5f').lineWidth(1).moveTo(leftMargin, y).lineTo(pageW - rightMargin, y).stroke();
+            y += 18;
+
+            const _stripPrefix = (raw) => String(raw || '').trim().replace(/^\d+\.\s*/, '').trim();
+
+            // Per-parameter remarks
+            const filledRemarks = remarks ? Object.entries(remarks).filter(([, v]) => v && String(v).trim()) : [];
+            if (filledRemarks.length > 0) {
+                doc.font('Helvetica-Bold').fontSize(13).fillColor('#002b5f')
+                   .text('Per-Parameter Remarks', leftMargin, y);
+                y += 22;
+                filledRemarks.forEach(([param, txt]) => {
+                    const cleanParam = _stripPrefix(param);
+                    const txtStr = String(txt);
+                    // Measure text height
+                    doc.font('Helvetica').fontSize(10);
+                    const textHeight = doc.heightOfString(txtStr, { width: contentW - 14 });
+                    const blockH = 22 + textHeight + 8;
+                    // Page break if necessary
+                    if (y + blockH > doc.page.height - 60) {
+                        doc.addPage();
+                        y = 50;
+                    }
+                    // Yellow callout background
+                    doc.rect(leftMargin, y, contentW, blockH).fill('#fff8e1');
+                    // Left accent stripe
+                    doc.rect(leftMargin, y, 3, blockH).fill('#ffb300');
+                    // Param name
+                    doc.fillColor('#664d03').font('Helvetica-Bold').fontSize(11)
+                       .text(cleanParam, leftMargin + 10, y + 6);
+                    // Remark text
+                    doc.fillColor('#333').font('Helvetica').fontSize(10)
+                       .text(txtStr, leftMargin + 10, y + 22, { width: contentW - 14, lineGap: 1 });
+                    y += blockH + 6;
+                });
+            }
+
+            // Overall note
+            if (globalNote && String(globalNote).trim()) {
+                doc.font('Helvetica').fontSize(10);
+                const noteStr = String(globalNote);
+                const noteH = doc.heightOfString(noteStr, { width: contentW - 14 });
+                const blockH = 22 + noteH + 8;
+                if (y + blockH > doc.page.height - 60) {
+                    doc.addPage();
+                    y = 50;
+                }
+                doc.font('Helvetica-Bold').fontSize(13).fillColor('#002b5f')
+                   .text('Overall Note', leftMargin, y);
+                y += 22;
+                doc.rect(leftMargin, y, contentW, blockH).fill('#e3f2fd');
+                doc.rect(leftMargin, y, 3, blockH).fill('#1976d2');
+                doc.fillColor('#0d47a1').font('Helvetica-Bold').fontSize(11)
+                   .text('OVERALL', leftMargin + 10, y + 6);
+                doc.fillColor('#333').font('Helvetica').fontSize(10)
+                   .text(noteStr, leftMargin + 10, y + 22, { width: contentW - 14, lineGap: 1 });
+                y += blockH + 6;
+            }
+
+            // Footer on every page (page numbers + ref)
+            const range = doc.bufferedPageRange();
+            for (let i = 0; i < range.count; i++) {
+                doc.switchToPage(range.start + i);
+                const footerY = doc.page.height - 30;
+                doc.fillColor('#888').font('Helvetica').fontSize(8)
+                   .text(ref || '', leftMargin, footerY);
+                doc.text(`Page ${i + 1} of ${range.count}`, 0, footerY, { align: 'right', width: pageW - rightMargin });
+            }
+
+            doc.end();
+        } catch (e) {
+            reject(e);
+        }
+    });
+}
+
 function buildEmailHtml({ title, intro, infoRows, ctaUrl, ctaLabel, paramRemarks }) {
     const rows = (infoRows || []).map(r =>
         `<tr><td style="padding:6px 12px 6px 0; color:#666; font-weight:600; vertical-align:top;">${r[0]}</td>
@@ -1492,7 +1628,43 @@ app.post('/api/request-changes', async (req, res) => {
         if (state[project].latestPending === revision) state[project].latestPending = null;
         await writeApprovalsState(state);
 
-        // Email costing team with remarks
+        // Build the server-side Remarks PDF (no rates/values — only remarks + overall note)
+        let remarksPdfBuf = null;
+        let remarksPdfWebUrl = null;
+        try {
+            remarksPdfBuf = await buildRemarksPdfBuffer({
+                ref: entry.ref,
+                revision,
+                clientName: entry.clientName,
+                projectName: entry.projectName,
+                location: entry.location,
+                decidedAt: entry.decidedAt,
+                remarks: cleaned,
+                globalNote: entry.globalNote
+            });
+            // Save it into the project's OneDrive folder as a permanent record
+            try {
+                const targetEmail = process.env.TARGET_USER_EMAIL;
+                const remarksFolderPath = `:/Metfraa_Costing_App/Generated_Costings/${project}/Remarks:`;
+                const remarksFileName = `${revision}_REMARKS.pdf`;
+                const filePath = `:/Metfraa_Costing_App/Generated_Costings/${project}/Remarks/${remarksFileName}:`;
+                const uploadResult = await graphClient
+                    .api(`/users/${targetEmail}/drive/root${filePath}/content`)
+                    .header('Content-Type', 'application/pdf')
+                    .put(remarksPdfBuf);
+                remarksPdfWebUrl = (uploadResult && uploadResult.webUrl) || null;
+                // Stash the URL into the approvals state so the frontend can fetch it later
+                entry.remarksPdfUrl = remarksPdfWebUrl;
+                entry.remarksPdfFileName = remarksFileName;
+                await writeApprovalsState(state);
+            } catch (uploadErr) {
+                console.error('Remarks PDF OneDrive upload failed (continuing without):', uploadErr.message);
+            }
+        } catch (pdfErr) {
+            console.error('Remarks PDF generation failed (continuing without):', pdfErr.message);
+        }
+
+        // Email costing team with remarks (+ Remarks PDF as attachment if generated)
         const cta = buildDeepLink('pending', project, revision);
         const html = buildEmailHtml({
             title: '✎ Costing Estimation — Changes Requested',
@@ -1508,9 +1680,25 @@ app.post('/api/request-changes', async (req, res) => {
             ctaUrl: cta,
             ctaLabel: '📋 Open in App'
         });
-        sendEmail({ to: COSTING_TEAM_EMAIL, subject: `[Changes Requested] ${entry.clientName || ''} · ${entry.projectName || ''} · ${revision}`, htmlBody: html });
+        const attachments = remarksPdfBuf ? [{
+            name: `${revision}_REMARKS.pdf`,
+            contentBytes: remarksPdfBuf,
+            contentType: 'application/pdf'
+        }] : [];
+        sendEmail({
+            to: COSTING_TEAM_EMAIL,
+            subject: `[Changes Requested] ${entry.clientName || ''} · ${entry.projectName || ''} · ${revision}`,
+            htmlBody: html,
+            attachments
+        });
 
-        res.json({ success: true, status: 'changes_requested', project, revision, remarks: cleaned });
+        res.json({
+            success: true,
+            status: 'changes_requested',
+            project, revision,
+            remarks: cleaned,
+            remarksPdfUrl: remarksPdfWebUrl
+        });
     } catch (error) {
         console.error('request-changes error:', error.message);
         res.status(500).json({ success: false, error: error.message });

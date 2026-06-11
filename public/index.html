@@ -498,7 +498,7 @@ body { font-family: 'Segoe UI', Tahoma, sans-serif; background: var(--brand-grey
       <div style="font-size:12px; color:#6c757d; margin-bottom:12px;">
         Enter the quantity for each parameter. Blank quantities = that parameter won't appear in the final quotation.
       </div>
-      <div id="qtyTable" style="display:grid; grid-template-columns:48px 1fr 140px 60px; gap:8px 14px; align-items:center; font-size:13px;">
+      <div id="qtyTable" style="display:grid; grid-template-columns:48px 1fr 140px 60px 170px; gap:8px 14px; align-items:center; font-size:13px;">
         <em style="color:#aaa; grid-column:1/-1;">— loading parameters from master sheet —</em>
       </div>
 
@@ -818,7 +818,7 @@ body { font-family: 'Segoe UI', Tahoma, sans-serif; background: var(--brand-grey
 // Same-origin: backend serves this HTML, so '' resolves to host root
 const RENDER_URL = '';
 let MASTER_DB = {};
-let projectState = { details: {}, qtys: {}, selections: {}, siteSpecific: {} };
+let projectState = { details: {}, qtys: {}, selections: {}, siteSpecific: {}, rateSource: {}, projectRates: {} };
 
 // Strip the "N. " Excel ordering prefix so display labels stay clean.
 // e.g. "3. SAG & BRACING RODS" -> "SAG & BRACING RODS"
@@ -1234,12 +1234,13 @@ function renderQtyTable() {
   const c = document.getElementById('qtyTable');
   if (!c) return;
   c.innerHTML = '';
-  // Header row (4 cols: include checkbox | name | qty | unit)
+  // Header row (5 cols: include | name | qty | unit | rates-toggle)
   c.insertAdjacentHTML('beforeend',
     '<div style="font-weight:700; font-size:11px; text-transform:uppercase; color:#666; text-align:center;" title="Include in Step 2">Use</div>' +
     '<div style="font-weight:700; font-size:11px; text-transform:uppercase; color:#666;">Parameter</div>' +
     '<div style="font-weight:700; font-size:11px; text-transform:uppercase; color:#666; text-align:right;">Quantity</div>' +
-    '<div style="font-weight:700; font-size:11px; text-transform:uppercase; color:#666;">Unit</div>'
+    '<div style="font-weight:700; font-size:11px; text-transform:uppercase; color:#666;">Unit</div>' +
+    '<div style="font-weight:700; font-size:11px; text-transform:uppercase; color:#666; text-align:center;" title="Rate source: Default uses master sheet rates; Project-Specific lets you type RM option + rate manually">Rates</div>'
   );
   if (!projectState.included) projectState.included = {};
   let added = 0;
@@ -1259,12 +1260,26 @@ function renderQtyTable() {
     projectState.included[pname] = isIncluded;
     const id = 'qty_' + pname.replace(/[^a-z0-9]/gi, '_');
     const cbId = 'inc_' + pname.replace(/[^a-z0-9]/gi, '_');
+    const rsId = 'rs_' + pname.replace(/[^a-z0-9]/gi, '_');
     serial++;
+    // Initialise rateSource flag for this param if absent
+    if (!projectState.rateSource) projectState.rateSource = {};
+    if (!projectState.rateSource[pname]) projectState.rateSource[pname] = 'default';
+    const isProj = projectState.rateSource[pname] === 'project';
+    const togglePill = `
+      <div id="${rsId}" data-param="${pname.replace(/"/g,'&quot;')}" onclick="toggleRateSource(this)"
+           style="cursor:pointer; user-select:none; display:inline-flex; align-items:center; padding:3px; border-radius:14px; background:${isProj ? '#fff8e1' : '#e8f5e9'}; border:1px solid ${isProj ? '#ffb300' : '#a5d6a7'}; font-size:11px; font-weight:600;"
+           title="Click to switch between Default master rates and Project-Specific (user entered) RM">
+        <span style="padding:2px 9px; border-radius:10px; background:${isProj ? 'transparent' : '#28a745'}; color:${isProj ? '#888' : '#fff'};">Default</span>
+        <span style="padding:2px 9px; border-radius:10px; background:${isProj ? '#ff9800' : 'transparent'}; color:${isProj ? '#fff' : '#888'};">Project</span>
+      </div>
+    `;
     c.insertAdjacentHTML('beforeend', `
       <div style="text-align:center;"><input type="checkbox" id="${cbId}" ${isIncluded?'checked':''} data-param="${pname.replace(/"/g,'&quot;')}" oninput="onIncludeToggle(this)" title="Include in Step 2"></div>
       <div>${serial}. ${cleanParamLabel(pname)}</div>
       <input type="number" class="form-input" id="${id}" step="0.01" value="${currentQty}" placeholder="0" data-param="${pname.replace(/"/g,'&quot;')}" oninput="onQtyTableInput(this)" style="text-align:right;">
       <div style="color:#888; font-family:monospace;">${unit}</div>
+      <div style="text-align:center;">${togglePill}</div>
     `);
     added++;
   });
@@ -1288,6 +1303,27 @@ function onIncludeToggle(cb) {
   const param = cb.dataset.param;
   if (!projectState.included) projectState.included = {};
   projectState.included[param] = cb.checked;
+}
+
+// Toggle a parameter's rate source between 'default' (master sheet) and 'project' (user-entered RM)
+function toggleRateSource(el) {
+  const param = el.dataset.param;
+  if (!projectState.rateSource) projectState.rateSource = {};
+  if (!projectState.projectRates) projectState.projectRates = {};
+  const cur = projectState.rateSource[param] || 'default';
+  const next = (cur === 'default') ? 'project' : 'default';
+  projectState.rateSource[param] = next;
+  // When switching to project-specific, initialise empty entry if missing
+  if (next === 'project' && !projectState.projectRates[param]) {
+    projectState.projectRates[param] = { optionName: '', rate: 0 };
+  }
+  // If a selection for this param exists (from a prior visit to Step 2), clear it so
+  // the param re-builds cleanly with the new rate source on next Step 2 entry.
+  if (projectState.selections && projectState.selections[param]) {
+    delete projectState.selections[param];
+  }
+  // Re-render the table so the pill flips
+  renderQtyTable();
 }
 
 // Returns the array of parameters the user has included for this quote, in master sheet order.
@@ -1323,7 +1359,10 @@ async function checkAuthMode() {
   } catch(e) { adminProtected = false; }
 }
 
-function showPwModal() {
+let _pwPendingTarget = 'settings';  // 'settings' | 'projects' — what to open after auth
+let _pwDeferredProject = null;       // if set, open this specific project after auth
+function showPwModal(target) {
+  _pwPendingTarget = target || 'settings';
   document.getElementById('pwModal').classList.add('show');
   setTimeout(() => document.getElementById('pwInput').focus(), 50);
 }
@@ -1358,7 +1397,18 @@ async function submitPw() {
     if (d.ok) {
       adminPassword = pw;
       closePw();
-      _enterSettings();
+      // Route to whatever requested auth
+      if (_pwPendingTarget === 'projects') {
+        if (_pwDeferredProject) {
+          const proj = _pwDeferredProject;
+          _pwDeferredProject = null;
+          openProjectRevisions(proj);
+        } else {
+          _enterProjects();
+        }
+      } else {
+        _enterSettings();
+      }
     } else {
       toast('❌ Wrong password', 'err');
     }
@@ -1738,6 +1788,8 @@ function _applySavedQuotation(saved) {
   projectState.included = saved.included || {};
   projectState.step3 = saved.step3 || {};
   projectState.customerQuote = saved.customerQuote || { descriptions: {} };
+  projectState.rateSource = saved.rateSource || {};
+  projectState.projectRates = saved.projectRates || {};
 
   renderQtyTable();
   initSidebar();
@@ -2386,25 +2438,22 @@ async function loadPendingList() {
 function _renderPendingCard(it, idx) {
   const decided = it.decidedAt ? _apvRelativeTime(it.decidedAt) : '';
   const remarkCount = it.remarks ? Object.keys(it.remarks).filter(k => it.remarks[k]).length : 0;
-  const streamUrl = `${RENDER_URL}/api/stream-project-revision-pdf`
-    + `?project=${encodeURIComponent(it.project)}`
-    + `&revision=${encodeURIComponent(it.revision)}`;
   // Build remarks HTML
   let remarksHtml = '';
   const filledRemarks = it.remarks ? Object.entries(it.remarks).filter(([, v]) => v && String(v).trim()) : [];
   if (filledRemarks.length > 0) {
     remarksHtml = filledRemarks.map(([param, txt]) => `
-      <div style="padding:9px 12px; background:#fff8e1; border-left:3px solid #ffb300; border-radius:3px; margin-bottom:6px; font-size:13px;">
-        <div style="font-weight:700; color:#664d03; margin-bottom:3px; font-size:12px;">${_esc(_apvCanonParam(param).display)}</div>
-        <div style="white-space:pre-wrap; color:#333;">${_esc(txt)}</div>
+      <div style="padding:11px 14px; background:#fff8e1; border-left:3px solid #ffb300; border-radius:3px; margin-bottom:8px; font-size:13px;">
+        <div style="font-weight:700; color:#664d03; margin-bottom:4px; font-size:13px;">${_esc(_apvCanonParam(param).display)}</div>
+        <div style="white-space:pre-wrap; color:#333; line-height:1.45;">${_esc(txt)}</div>
       </div>
     `).join('');
   }
   if (it.globalNote) {
     remarksHtml += `
-      <div style="padding:9px 12px; background:#e3f2fd; border-left:3px solid #1976d2; border-radius:3px; margin-bottom:6px; margin-top:8px; font-size:13px;">
-        <div style="font-weight:700; color:#0d47a1; margin-bottom:3px; font-size:12px;">OVERALL NOTE</div>
-        <div style="white-space:pre-wrap; color:#333;">${_esc(it.globalNote)}</div>
+      <div style="padding:11px 14px; background:#e3f2fd; border-left:3px solid #1976d2; border-radius:3px; margin-bottom:8px; margin-top:10px; font-size:13px;">
+        <div style="font-weight:700; color:#0d47a1; margin-bottom:4px; font-size:13px;">OVERALL NOTE</div>
+        <div style="white-space:pre-wrap; color:#333; line-height:1.45;">${_esc(it.globalNote)}</div>
       </div>
     `;
   }
@@ -2425,22 +2474,136 @@ function _renderPendingCard(it, idx) {
           </div>
           <div style="display:flex; flex-direction:column; gap:6px; flex-shrink:0;">
             <button class="btn btn-primary" style="padding:6px 14px; font-size:13px;" onclick="startRevisionFromPending(${idx})">↗ Start Revision</button>
-            <a class="btn btn-secondary" style="padding:6px 14px; font-size:11px; text-decoration:none; text-align:center;" href="${streamUrl}" target="_blank">↗ View Original PDF</a>
+            <button class="btn btn-secondary" style="padding:6px 14px; font-size:12px;" onclick="downloadRemarksPdf(${idx})">⬇ Download Remarks PDF</button>
           </div>
         </div>
       </div>
-      <div style="display:grid; grid-template-columns: 1fr 1fr; gap:0;">
-        <div style="padding:14px 18px; border-right:1px solid #f0f0f0;">
-          <div style="font-size:11px; font-weight:700; text-transform:uppercase; color:#666; margin-bottom:8px;">Original Costing</div>
-          <iframe src="${streamUrl}" style="width:100%; height:420px; border:1px solid #eee; border-radius:4px; background:#525659;" title="${_esc(it.revision)}"></iframe>
-        </div>
-        <div style="padding:14px 18px;">
-          <div style="font-size:11px; font-weight:700; text-transform:uppercase; color:#666; margin-bottom:8px;">Arasu's Remarks</div>
-          <div style="max-height:420px; overflow-y:auto;">${remarksHtml}</div>
-        </div>
+      <div style="padding:18px 22px;">
+        <div style="font-size:11px; font-weight:700; text-transform:uppercase; color:#666; margin-bottom:10px;">Arasu's Remarks</div>
+        ${remarksHtml}
       </div>
     </div>
   `;
+}
+
+// =========================================================
+// REMARKS PDF (client-side) — generates a branded PDF with only the remarks,
+// no rate/value information. Used by the "Download Remarks PDF" button on
+// the Pending Estimates page (so the costing user gets a printable record
+// of what to change, without seeing the confidential cost estimation).
+// =========================================================
+function buildRemarksPdfDoc(it) {
+  const doc = new jspdf.jsPDF({ unit:'mm', format:'a4', orientation:'portrait' });
+  const pageW = doc.internal.pageSize.getWidth();
+  const margin = 14;
+
+  // Header band (white background, two logos like the Cost Estimation PDF, but title says "REQUESTED CHANGES")
+  // We reuse drawPdfHeader if available; if not, draw inline.
+  try {
+    if (typeof drawPdfHeader === 'function') {
+      drawPdfHeader(doc, { docType: 'remarks', client: it.clientName, project: it.projectName, title: 'REQUESTED CHANGES' });
+    } else {
+      doc.setFontSize(18); doc.setTextColor(0,43,95); doc.setFont('helvetica','bold');
+      doc.text('REQUESTED CHANGES', pageW/2, 18, { align:'center' });
+      doc.setFontSize(12); doc.setFont('helvetica','normal');
+      doc.text(`${it.clientName || '—'}  ·  ${it.projectName || '—'}`, pageW/2, 26, { align:'center' });
+    }
+  } catch(_) {}
+
+  // Info table
+  let y = 50;
+  doc.setFontSize(9); doc.setTextColor(80,80,80); doc.setFont('helvetica','normal');
+  const infoRows = [
+    ['Quote Ref',       it.ref || '—'],
+    ['Revision',        it.revision || '—'],
+    ['Client',          it.clientName || '—'],
+    ['Project',         it.projectName || '—'],
+    ['Location',        it.location || '—'],
+    ['Decided At',      it.decidedAt ? new Date(it.decidedAt).toLocaleString('en-IN') : '—']
+  ];
+  const colLabel = margin;
+  const colValue = margin + 36;
+  infoRows.forEach(([k, v]) => {
+    doc.setFont('helvetica','bold'); doc.setTextColor(80,80,80);
+    doc.text(k + ':', colLabel, y);
+    doc.setFont('helvetica','normal'); doc.setTextColor(20,20,20);
+    doc.text(String(v), colValue, y);
+    y += 5;
+  });
+
+  y += 6;
+  doc.setDrawColor(0,43,95); doc.setLineWidth(0.5);
+  doc.line(margin, y, pageW - margin, y);
+  y += 8;
+
+  // Section title — Per-Parameter Remarks
+  const filledRemarks = it.remarks ? Object.entries(it.remarks).filter(([, v]) => v && String(v).trim()) : [];
+  if (filledRemarks.length > 0) {
+    doc.setFontSize(12); doc.setTextColor(0,43,95); doc.setFont('helvetica','bold');
+    doc.text('Per-Parameter Remarks', margin, y);
+    y += 7;
+    doc.setFontSize(10); doc.setFont('helvetica','normal');
+    filledRemarks.forEach(([param, txt]) => {
+      const cleanParam = _apvCanonParam(param).display;
+      const txtLines = doc.splitTextToSize(String(txt), pageW - 2*margin - 4);
+      const blockHeight = 8 + txtLines.length * 5 + 4;
+      // page break check
+      if (y + blockHeight > 280) { doc.addPage(); y = 20; }
+      // Yellow callout
+      doc.setFillColor(255,248,225);
+      doc.setDrawColor(255,179,0); doc.setLineWidth(0.4);
+      doc.rect(margin, y, pageW - 2*margin, blockHeight, 'FD');
+      // Left accent stripe
+      doc.setFillColor(255,179,0);
+      doc.rect(margin, y, 1.2, blockHeight, 'F');
+      // Param name
+      doc.setFontSize(10); doc.setTextColor(102,77,3); doc.setFont('helvetica','bold');
+      doc.text(cleanParam, margin + 4, y + 5);
+      // Remark text
+      doc.setFontSize(10); doc.setTextColor(40,40,40); doc.setFont('helvetica','normal');
+      doc.text(txtLines, margin + 4, y + 10);
+      y += blockHeight + 3;
+    });
+  }
+
+  // Overall note
+  if (it.globalNote) {
+    if (y > 250) { doc.addPage(); y = 20; }
+    doc.setFontSize(12); doc.setTextColor(0,43,95); doc.setFont('helvetica','bold');
+    doc.text('Overall Note', margin, y);
+    y += 7;
+    const lines = doc.splitTextToSize(String(it.globalNote), pageW - 2*margin - 4);
+    const noteHeight = lines.length * 5 + 6;
+    doc.setFillColor(227,242,253);
+    doc.setDrawColor(25,118,210); doc.setLineWidth(0.4);
+    doc.rect(margin, y, pageW - 2*margin, noteHeight, 'FD');
+    doc.setFillColor(25,118,210);
+    doc.rect(margin, y, 1.2, noteHeight, 'F');
+    doc.setFontSize(10); doc.setTextColor(40,40,40); doc.setFont('helvetica','normal');
+    doc.text(lines, margin + 4, y + 5);
+    y += noteHeight + 3;
+  }
+
+  // Footer ref on all pages
+  try {
+    if (typeof stampFootersOnAllPages === 'function') {
+      stampFootersOnAllPages(doc, it.ref || '', 'remarks');
+    }
+  } catch(_) {}
+
+  return doc;
+}
+
+function downloadRemarksPdf(idx) {
+  const it = _pendingItems[idx];
+  if (!it) return;
+  try {
+    const doc = buildRemarksPdfDoc(it);
+    const safe = (it.revision || 'revision').replace(/[^a-z0-9_-]/gi,'_');
+    doc.save(`${safe}_REMARKS.pdf`);
+  } catch (e) {
+    toast('❌ Could not generate Remarks PDF: ' + e.message, 'err', 5000);
+  }
 }
 
 async function startRevisionFromPending(idx) {
@@ -2630,6 +2793,10 @@ let _currentProject = null;
 let _currentRevision = null;
 
 function navProjects() {
+  if (adminProtected && !adminPassword) { showPwModal('projects'); return; }
+  _enterProjects();
+}
+function _enterProjects() {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.step-indicator').forEach(s => s.classList.remove('active'));
   document.getElementById('pageProjects').classList.add('active');
@@ -2673,6 +2840,12 @@ async function loadProjectsList() {
 }
 
 async function openProjectRevisions(projectFolder) {
+  if (adminProtected && !adminPassword) {
+    // Stash the deep target so we resume after auth
+    _pwDeferredProject = projectFolder;
+    showPwModal('projects');
+    return;
+  }
   _currentProject = projectFolder;
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.getElementById('pageProjectDetail').classList.add('active');
@@ -3128,7 +3301,9 @@ async function saveAndProceedToCustomerQuote() {
       included: projectState.included || {},
       step3: projectState.step3 || {},
       step3Computed,
-      customerQuote: projectState.customerQuote || { descriptions: {} }
+      customerQuote: projectState.customerQuote || { descriptions: {} },
+      rateSource: projectState.rateSource || {},
+      projectRates: projectState.projectRates || {}
     };
     const res = await fetch(`${RENDER_URL}/api/save-quotation`, {
       method: 'POST',
@@ -3511,6 +3686,30 @@ function loadWorkspace(name, el) {
     }
 
     if (isRM) {
+      // Branch on rateSource for this param. If 'project', the user types option name + rate manually
+      // (single row, no +Add RM, no master dropdown).
+      const rateSrc = (projectState.rateSource && projectState.rateSource[name]) || 'default';
+      if (rateSrc === 'project') {
+        const pr = (projectState.projectRates && projectState.projectRates[name]) || { optionName: '', rate: 0 };
+        const paramQtyVal = parseFloat(projectState.qtys[name]) || 0;
+        const row = document.createElement('tr');
+        row.dataset.rmMode = 'project';
+        row.dataset.sub = 'RM COST';
+        row.style.background = '#fff8e1';
+        row.innerHTML = `
+          <td>RM COST <span class="tag-rate" style="background:#ffe69c;color:#664d03;">PROJECT</span></td>
+          <td>
+            <input type="text" class="form-input rm-proj-name" placeholder="Option name (e.g. customer-supplied steel)"
+                   value="${(pr.optionName || '').replace(/"/g,'&quot;')}" style="max-width:240px; margin-right:8px;">
+            <input type="number" class="form-input rm-proj-rate" placeholder="Rate"
+                   value="${pr.rate || ''}" step="0.01" style="width:120px;">
+            <span style="color:#888; font-size:11px; margin-left:6px;">per ${unit}${paramQtyVal > 0 ? ` · qty ${fmtNum(paramQtyVal, 2)} ${unit}` : ''}</span>
+          </td>
+          <td></td>
+        `;
+        body.appendChild(row);
+        return;
+      }
       const savedRMs = (sel['RM COST'] && Array.isArray(sel['RM COST'].rms)) ? sel['RM COST'].rms : [{ id:'', qty:'' }];
       const paramQtyVal = parseFloat(projectState.qtys[name]) || 0;
       const isSingleRM = savedRMs.length === 1;
@@ -3570,6 +3769,8 @@ function loadWorkspace(name, el) {
   document.querySelectorAll('.o-sel').forEach(i => i.oninput = sync);
   document.querySelectorAll('.rm-sel').forEach(i => i.oninput = sync);
   document.querySelectorAll('.rm-qty').forEach(i => i.oninput = sync);
+  document.querySelectorAll('.rm-proj-name').forEach(i => i.oninput = sync);
+  document.querySelectorAll('.rm-proj-rate').forEach(i => i.oninput = sync);
   document.querySelectorAll('.rmk').forEach(i => i.oninput = sync);
   sync();
 }
@@ -3656,7 +3857,7 @@ function sync() {
   let unitRateTotal = 0;   // sum of per-unit contributions (for "unit rate" display)
   let paramTotal = 0;      // actual money total for the parameter
 
-  // ---- 1. RM COST (multi-RM) ----
+  // ---- 1. RM COST (multi-RM OR project-specific) ----
   // Special case: for Gutter / DT Pipe / Downtake parameters, the effective RM
   // qty is the entered qty divided by 2.5 (per business logic). The displayed qty
   // stays as entered; only the cost calculation changes.
@@ -3664,55 +3865,80 @@ function sync() {
   let totalRMCost = 0;     // money
   let rmUnitCostForPct = 0; // per-unit RM cost basis for percent rows
   let rmQtySum = 0;
-  const rmRows = document.querySelectorAll('#builderBody tr[data-rmidx]');
   const rms = [];
-  rmRows.forEach(row => {
-    const dd = row.querySelector('.rm-sel');
-    const qtyEl = row.querySelector('.rm-qty');
-    const rateCell = row.querySelector('.rm-rate');
-    const lineCell = row.querySelector('.rm-line');
-    if (!dd || !dd.value) {
-      if (rateCell) rateCell.innerText = '—';
-      if (lineCell) lineCell.innerText = '—';
-      return;
+
+  // FIRST: check for the project-specific RM row
+  const projRow = document.querySelector('#builderBody tr[data-rm-mode="project"]');
+  if (projRow) {
+    const nameEl = projRow.querySelector('.rm-proj-name');
+    const rateEl = projRow.querySelector('.rm-proj-rate');
+    const optionName = (nameEl && nameEl.value && nameEl.value.trim()) || '';
+    const rate = parseFloat(rateEl && rateEl.value) || 0;
+    // Persist back to state for save / restore
+    if (!projectState.projectRates) projectState.projectRates = {};
+    projectState.projectRates[activeP] = { optionName, rate };
+    if (optionName && rate > 0 && paramQty > 0) {
+      const effectiveQty = paramQty / rmDivisor;
+      const lineTotal = rate * effectiveQty;
+      totalRMCost = lineTotal;
+      rmQtySum = paramQty;
+      rms.push({
+        id: '__project__',
+        name: optionName,
+        group: 'PROJECT_SPECIFIC',
+        rate, qty: paramQty, line: lineTotal,
+        isProjectSpecific: true
+      });
     }
-    const opt = dd.options[dd.selectedIndex];
-    const rate = parseFloat(opt.dataset.rate) || 0;
-    // RM qty: use the per-RM qty if entered (multi-RM), else fall back to paramQty (single RM)
-    const rmQty = (qtyEl && qtyEl.value !== '') ? (parseFloat(qtyEl.value) || 0) : paramQty;
-    // Apply Gutter/DT Pipe divisor to the cost calc (qty shown stays the same)
-    const effectiveRmQty = rmQty / rmDivisor;
-    const lineTotal = rate * effectiveRmQty;
-    totalRMCost += lineTotal;
-    rmQtySum += rmQty;
-    if (rateCell) rateCell.innerText = fmtINR(rate);
-    if (lineCell) lineCell.innerText = fmtINR(lineTotal);
-    // For single-RM rows, the qty cell is a display <div> (not input). Refresh it live.
-    if (!qtyEl) {
-      const displayCell = row.querySelector('td:nth-child(4) div');
-      if (displayCell && paramQty > 0) {
-        displayCell.innerHTML = `${fmtNum(paramQty, 2)} ${unit}<br><span style="font-size:9px; color:#999;">auto</span>`;
-      } else if (displayCell) {
-        displayCell.innerHTML = `—<br><span style="font-size:9px; color:#999;">auto</span>`;
+  } else {
+    // Standard default-rate RM rows (master dropdown)
+    const rmRows = document.querySelectorAll('#builderBody tr[data-rmidx]');
+    rmRows.forEach(row => {
+      const dd = row.querySelector('.rm-sel');
+      const qtyEl = row.querySelector('.rm-qty');
+      const rateCell = row.querySelector('.rm-rate');
+      const lineCell = row.querySelector('.rm-line');
+      if (!dd || !dd.value) {
+        if (rateCell) rateCell.innerText = '—';
+        if (lineCell) lineCell.innerText = '—';
+        return;
       }
-    }
-    rms.push({
-      id: dd.value, name: opt.dataset.name, group: opt.dataset.group || '',
-      rate, qty: rmQty, line: lineTotal
+      const opt = dd.options[dd.selectedIndex];
+      const rate = parseFloat(opt.dataset.rate) || 0;
+      const rmQty = (qtyEl && qtyEl.value !== '') ? (parseFloat(qtyEl.value) || 0) : paramQty;
+      const effectiveRmQty = rmQty / rmDivisor;
+      const lineTotal = rate * effectiveRmQty;
+      totalRMCost += lineTotal;
+      rmQtySum += rmQty;
+      if (rateCell) rateCell.innerText = fmtINR(rate);
+      if (lineCell) lineCell.innerText = fmtINR(lineTotal);
+      // For single-RM rows, the qty cell is a display <div> (not input). Refresh it live.
+      if (!qtyEl) {
+        const displayCell = row.querySelector('td:nth-child(4) div');
+        if (displayCell && paramQty > 0) {
+          displayCell.innerHTML = `${fmtNum(paramQty, 2)} ${unit}<br><span style="font-size:9px; color:#999;">auto</span>`;
+        } else if (displayCell) {
+          displayCell.innerHTML = `—<br><span style="font-size:9px; color:#999;">auto</span>`;
+        }
+      }
+      rms.push({
+        id: dd.value, name: opt.dataset.name, group: opt.dataset.group || '',
+        rate, qty: rmQty, line: lineTotal
+      });
     });
-  });
+  }
+
   if (rms.length > 0) {
     selStore['RM COST'] = { rms, line: totalRMCost, isRM: true };
     paramTotal += totalRMCost;
-    // per-unit RM cost basis for % rows = totalRMCost / paramQty (guard divide-by-zero)
     rmUnitCostForPct = paramQty > 0 ? totalRMCost / paramQty : 0;
     unitRateTotal += rmUnitCostForPct;
   }
 
-  // Sum-mismatch warning (only when multiple RMs)
+  // Sum-mismatch warning (only when multiple default RMs)
   const warnEl = document.getElementById('rmSumWarning');
   if (warnEl) {
-    if (rms.length > 1 && paramQty > 0 && Math.abs(rmQtySum - paramQty) > 0.001) {
+    if (!projRow && rms.length > 1 && paramQty > 0 && Math.abs(rmQtySum - paramQty) > 0.001) {
       warnEl.style.display = 'block';
       warnEl.innerText = `⚠ RM quantities sum to ${fmtNum(rmQtySum,2)} ${unit}, but parameter quantity is ${fmtNum(paramQty,2)} ${unit} (difference ${fmtNum(Math.abs(rmQtySum-paramQty),2)}).`;
     } else {
@@ -3822,7 +4048,9 @@ function performAutosave() {
       siteSpecific: projectState.siteSpecific || {},
       included: projectState.included || {},
       step3: projectState.step3 || {},
-      customerQuote: projectState.customerQuote || { descriptions: {} }
+      customerQuote: projectState.customerQuote || { descriptions: {} },
+      rateSource: projectState.rateSource || {},
+      projectRates: projectState.projectRates || {}
     };
     localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(snapshot));
     const el = document.getElementById('autosaveStatus');
@@ -4004,7 +4232,9 @@ async function saveCurrentToCloud() {
       included: projectState.included || {},
       step3: projectState.step3 || {},
       step3Computed,
-      customerQuote: projectState.customerQuote || { descriptions: {} }
+      customerQuote: projectState.customerQuote || { descriptions: {} },
+      rateSource: projectState.rateSource || {},
+      projectRates: projectState.projectRates || {}
     };
     const res = await fetch(`${RENDER_URL}/api/save-quotation`, {
       method: 'POST',
@@ -4624,6 +4854,17 @@ function drawPdfHeader(doc, opts) {
     doc.text('Bill of Quantities', pageW / 2, 22, { align: 'center' });
     // Client and project are intentionally NOT shown here — they appear in the
     // 6-field info strip below the teal divider (per latest spec).
+  } else if (opts && opts.docType === 'remarks') {
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(16);
+    doc.text('REQUESTED CHANGES', pageW / 2, 14, { align: 'center' });
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(11);
+    doc.text(opts.client || '—', pageW / 2, 21, { align: 'center' });
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    doc.setTextColor(80, 80, 80);
+    doc.text(opts.project || '—', pageW / 2, 27, { align: 'center' });
   } else {
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(16);
@@ -4752,9 +4993,14 @@ function buildPDF() {
           const effectiveQty = (rm.qty || 0) / rmDivisor;
           const lineAmt = effectiveQty * (rm.rate || 0);
           preMarginTotal += lineAmt;
+          // Project-specific RM: drop the 'PROJECT_SPECIFIC' group prefix from the label
+          const isProj = !!rm.isProjectSpecific || rm.group === 'PROJECT_SPECIFIC';
+          const rmLabel = isProj
+            ? `RM COST  (${rm.name || 'Project Specific'})`
+            : `RM COST${rm.group ? ' — ' + rm.group : ''}  (${rm.name || ''})`;
           body.push([
             '',
-            stripRupee(`RM COST${rm.group ? ' — ' + rm.group : ''}  (${rm.name || ''})`),
+            stripRupee(rmLabel),
             (rm.rate || 0).toLocaleString('en-IN'),
             fmtNum(rm.qty, 2),
             unit,
@@ -4955,7 +5201,9 @@ async function saveToOneDrive() {
       included: projectState.included || {},
       step3: projectState.step3 || {},
       step3Computed,
-      customerQuote: projectState.customerQuote || { descriptions: {} }
+      customerQuote: projectState.customerQuote || { descriptions: {} },
+      rateSource: projectState.rateSource || {},
+      projectRates: projectState.projectRates || {}
     };
 
     const res = await fetch(`${RENDER_URL}/api/save-quotation`, {
