@@ -432,6 +432,31 @@ body { font-family: 'Segoe UI', Tahoma, sans-serif; background: var(--brand-grey
   <div id="page1" class="page active">
 
     <div class="card">
+      <div class="section-title">Type of Project</div>
+      <p style="font-size:12px; color:#666; margin-bottom:14px; margin-top:-4px;">Choose the project scope. This determines which cost components apply to every parameter.</p>
+      <div style="display:grid; grid-template-columns: 1fr 1fr; gap:14px;">
+        <label class="proj-type-card" data-value="supply_install" onclick="onProjectTypeChange('supply_install')" style="cursor:pointer; border:2px solid var(--brand-primary); background:#eef4fb; border-radius:8px; padding:14px 16px; transition:all 0.15s;">
+          <div style="display:flex; align-items:center; gap:10px; margin-bottom:6px;">
+            <input type="radio" name="projType" id="projType_supply_install" value="supply_install" checked style="margin:0; cursor:pointer;">
+            <span style="font-size:15px; font-weight:700; color:var(--brand-primary);">🏗️ SUPPLY + INSTALLATION</span>
+          </div>
+          <div style="font-size:12px; color:#555; line-height:1.45; padding-left:24px;">
+            Full quote — materials, freight, fabrication, finishing, and erection on site. Default.
+          </div>
+        </label>
+        <label class="proj-type-card" data-value="only_supply" onclick="onProjectTypeChange('only_supply')" style="cursor:pointer; border:2px solid #e0e0e0; background:#fafafa; border-radius:8px; padding:14px 16px; transition:all 0.15s;">
+          <div style="display:flex; align-items:center; gap:10px; margin-bottom:6px;">
+            <input type="radio" name="projType" id="projType_only_supply" value="only_supply" style="margin:0; cursor:pointer;">
+            <span style="font-size:15px; font-weight:700; color:#444;">📦 ONLY SUPPLY</span>
+          </div>
+          <div style="font-size:12px; color:#555; line-height:1.45; padding-left:24px;">
+            Materials and freight only. No labour, no erection charges. Erection Safety / Height settings are hidden.
+          </div>
+        </label>
+      </div>
+    </div>
+
+    <div class="card">
       <div class="section-title" style="display:flex; justify-content:space-between; align-items:center;">
         <span>Project Identification</span>
         <div style="display:flex; gap:8px;">
@@ -1790,6 +1815,13 @@ function _applySavedQuotation(saved) {
   projectState.customerQuote = saved.customerQuote || { descriptions: {} };
   projectState.rateSource = saved.rateSource || {};
   projectState.projectRates = saved.projectRates || {};
+
+  // Restore Type of Project. Default to supply_install for old saves missing the field.
+  const savedProjType = d.projectType || 'supply_install';
+  const projRadio = document.getElementById('projType_' + savedProjType);
+  if (projRadio) projRadio.checked = true;
+  // Sync card visuals to whichever is now checked, then hide/show Erection Safety/Height accordingly
+  if (typeof onProjectTypeChange === 'function') onProjectTypeChange(savedProjType);
 
   renderQtyTable();
   initSidebar();
@@ -3450,6 +3482,10 @@ function captureProjectDetails() {
   const tonnageInput = document.getElementById('projTonnage');
   if (tonnageInput) tonnageInput.value = fmtNum(computedTonnage, 2);
 
+  // Project type: 'supply_install' (default) | 'only_supply'
+  const projTypeEl = document.querySelector('input[name="projType"]:checked');
+  const projectType = projTypeEl ? projTypeEl.value : 'supply_install';
+
   projectState.details = {
     ref: v('projRef') || 'Met/est/MM/YYYY/XX',
     date: v('projDate'),
@@ -3462,6 +3498,7 @@ function captureProjectDetails() {
     tonnage: computedTonnage,
     margin: parseFloat(v('projMargin')) || 0,
     gst: parseFloat(v('projGST')) || 0,
+    projectType,
     // Project-wide auto-charges (all per MT × tonnage)
     distBandId: distBand ? distBand.id : null,
     distBandName: distBand ? distBand.name : null,
@@ -3489,6 +3526,60 @@ function captureProjectDetails() {
 
 function fmtINR(n) { return "₹ " + (Math.round(n || 0)).toLocaleString('en-IN'); }
 function fmtNum(n, dp=2) { return (n || 0).toLocaleString('en-IN', {maximumFractionDigits: dp}); }
+
+// =========================================================
+// PROJECT TYPE (Supply+Install vs Only Supply)
+// Drives which subcategories appear in Step 2 / PDF.
+// 'only_supply' drops Fixing/Erection [AUTO] and Fixing Charges (Labour) from
+// every parameter, and hides Erection Safety + Building Height inputs on Step 1.
+// =========================================================
+function onProjectTypeChange(value) {
+  // Update both radio + card visual
+  const radio = document.getElementById('projType_' + value);
+  if (radio) radio.checked = true;
+  document.querySelectorAll('.proj-type-card').forEach(card => {
+    if (card.dataset.value === value) {
+      card.style.border = '2px solid var(--brand-primary)';
+      card.style.background = '#eef4fb';
+    } else {
+      card.style.border = '2px solid #e0e0e0';
+      card.style.background = '#fafafa';
+    }
+  });
+  // Persist to state
+  if (!projectState.details) projectState.details = {};
+  projectState.details.projectType = value;
+  // Apply UI changes
+  applyProjectTypeUI(value);
+  // Re-render any open Step 2 workspace so labour / erection rows update immediately
+  if (typeof activeP !== 'undefined' && activeP) {
+    const item = document.querySelector(`.param-item[data-param="${activeP.replace(/"/g,'\\"')}"]`);
+    if (item) loadWorkspace(activeP, item);
+  }
+}
+
+function applyProjectTypeUI(value) {
+  // When ONLY SUPPLY, hide Erection Safety + Building Height fields (they only
+  // feed Fixing/Erection which doesn't apply in supply-only mode).
+  const erSafetyField = document.getElementById('erSafety') ? document.getElementById('erSafety').closest('.form-field') : null;
+  const heightField = document.getElementById('projHeight') ? document.getElementById('projHeight').closest('.form-field') : null;
+  const isSupplyOnly = (value === 'only_supply');
+  if (erSafetyField) erSafetyField.style.display = isSupplyOnly ? 'none' : '';
+  if (heightField) heightField.style.display = isSupplyOnly ? 'none' : '';
+}
+
+// True if a subcategory should be EXCLUDED based on the current project type.
+// Pass the raw subcategory name (e.g. "FIXING / ERECTION", "FIXING CHARGES (LABOUR)").
+function isSubcatHiddenByProjectType(sub) {
+  const projectType = (projectState.details && projectState.details.projectType) || 'supply_install';
+  if (projectType !== 'only_supply') return false;
+  const u = String(sub || '').toUpperCase();
+  // Hide anything fixing / erection / labour related when ONLY SUPPLY
+  if (u.includes('FIXING / ERECTION')) return true;
+  if (u.includes('ERECTION') && !u.includes('SAFETY')) return true;
+  if (u.includes('FIXING CHARGES') && u.includes('LABOUR')) return true;
+  return false;
+}
 
 // Filename builder: client_project_date with the same sanitisation rules as the server.
 function buildFileBase(d) {
@@ -3660,6 +3751,9 @@ function loadWorkspace(name, el) {
     const isRM = subKey === 'RM COST';
     const isAuto = isAutoSubcat(opts);
 
+    // Hide rows that don't apply to the current project type (e.g. Fixing/Erection
+    // and Labour are hidden when ONLY SUPPLY is selected).
+    if (isSubcatHiddenByProjectType(sub)) return;
     // Shot Blast and Fixed Charges (Design) are now project-wide. Render them as
     // read-only AUTO-style rows so the user can see what got applied from Step 1.
     if (subcatMatches(sub, 'SHOT BLAST') || subcatMatches(sub, 'FIXED CHARGES (DESIGN)') || subcatMatches(sub, 'FIXED CHARGES (CONVERSION)')) {
@@ -4327,24 +4421,51 @@ function injectVirtualParameters() {
       const isAuto = isAutoSubcat(opts);
 
       if (subKey === 'RM COST') {
-        const prevRMs = (existing['RM COST'] && Array.isArray(existing['RM COST'].rms)) ? existing['RM COST'].rms : [];
+        const rateSrc = (projectState.rateSource && projectState.rateSource[pName]) || 'default';
         const rmDivisor = isGutterOrDtPipe(pName) ? 2.5 : 1;
-        const rms = [];
-        let totalRM = 0;
-        prevRMs.forEach(rm => {
-          if (!rm.id) return;
-          const opt = opts.find(o => String(o.id) === String(rm.id));
-          if (!opt) return;
-          const rate = opt.rate || 0;
-          const q = (rm.qty !== '' && rm.qty != null) ? (parseFloat(rm.qty)||0) : paramQty;
-          const effectiveQ = q / rmDivisor;
-          const line = rate * effectiveQ;
-          totalRM += line;
-          rms.push({ id: opt.id, name: opt.name, group: opt.group||'', rate, qty: q, line });
-        });
-        if (rms.length > 0) {
-          out['RM COST'] = { rms, line: totalRM, isRM: true };
-          rmUnitCostForPct = paramQty > 0 ? totalRM / paramQty : 0;
+        if (rateSrc === 'project') {
+          // Project-specific RM: build from user-entered option name + rate (stored
+          // in projectState.projectRates), NOT from the master sheet options.
+          const pr = (projectState.projectRates && projectState.projectRates[pName]) || { optionName: '', rate: 0 };
+          const optName = (pr.optionName || '').trim();
+          const rate = parseFloat(pr.rate) || 0;
+          if (optName && rate > 0 && paramQty > 0) {
+            const effectiveQ = paramQty / rmDivisor;
+            const line = rate * effectiveQ;
+            out['RM COST'] = {
+              rms: [{
+                id: '__project__',
+                name: optName,
+                group: 'PROJECT_SPECIFIC',
+                rate,
+                qty: paramQty,
+                line,
+                isProjectSpecific: true
+              }],
+              line, isRM: true
+            };
+            rmUnitCostForPct = paramQty > 0 ? line / paramQty : 0;
+          }
+        } else {
+          // Default: build from master sheet options
+          const prevRMs = (existing['RM COST'] && Array.isArray(existing['RM COST'].rms)) ? existing['RM COST'].rms : [];
+          const rms = [];
+          let totalRM = 0;
+          prevRMs.forEach(rm => {
+            if (!rm.id) return;
+            const opt = opts.find(o => String(o.id) === String(rm.id));
+            if (!opt) return;
+            const rate = opt.rate || 0;
+            const q = (rm.qty !== '' && rm.qty != null) ? (parseFloat(rm.qty)||0) : paramQty;
+            const effectiveQ = q / rmDivisor;
+            const line = rate * effectiveQ;
+            totalRM += line;
+            rms.push({ id: opt.id, name: opt.name, group: opt.group||'', rate, qty: q, line });
+          });
+          if (rms.length > 0) {
+            out['RM COST'] = { rms, line: totalRM, isRM: true };
+            rmUnitCostForPct = paramQty > 0 ? totalRM / paramQty : 0;
+          }
         }
       }
     });
@@ -4403,6 +4524,9 @@ function injectVirtualParameters() {
           return;
         }
       }
+
+      // Project-type filter: skip Fixing/Erection AUTO and Labour-related subcats when only_supply.
+      if (isSubcatHiddenByProjectType(sub)) return;
 
       if (isAutoSubcat(opts)) {
         if (paramQty <= 0) return;
@@ -4959,6 +5083,11 @@ function buildPDF() {
   doc.setFont('helvetica','normal'); doc.setTextColor(20); doc.text(fmtNum(d.tonnage || 0, 2) + ' MT', 92, y);
   doc.setFont('helvetica','bold'); doc.setTextColor(100); doc.text('Area:', 140, y);
   doc.setFont('helvetica','normal'); doc.setTextColor(20); doc.text(fmtNum(d.area || 0, 0) + ' sqm', 158, y);
+  // Third row: Type of Project (full-width)
+  const ptLabel = ((d.projectType || 'supply_install') === 'only_supply') ? 'ONLY SUPPLY' : 'SUPPLY + INSTALLATION';
+  y += 6;
+  doc.setFont('helvetica','bold'); doc.setTextColor(100); doc.text('Project Type:', 14, y);
+  doc.setFont('helvetica','bold'); doc.setTextColor(0,43,95); doc.text(ptLabel, 36, y);
   y += 9;  // generous spacing before the table starts
 
   // Helper to format INR values for autoTable cells WITHOUT the ₹ symbol
